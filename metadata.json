@@ -1,0 +1,6 @@
+{
+  "name": "Zero Play",
+  "description": "Zero Play audio & video player, media downloader, and photo, video & audio converter and compressor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

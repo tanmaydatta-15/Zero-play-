@@ -1,0 +1,232 @@
+name: Build & Publish Zero Play OTA APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Publish as Preview (pre-release) build'
+        required: false
+        default: 'false'
+        type: boolean
+      version_override:
+        description: 'Optional custom version name (e.g. 2.2.0)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zeroplay-ota-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK & Accept Licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_DIR"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_DIR"/cmdline-tools/*/bin/sdkmanager; do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "Downloading Android command-line tools..."
+            mkdir -p "$SDK_DIR/cmdline-tools"
+            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdline-tools.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-extract
+            mv /tmp/cmdline-extract/cmdline-tools "$SDK_DIR/cmdline-tools/latest"
+            SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$SDK_DIR" "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+          "$SDKMANAGER" --sdk_root="$SDK_DIR" "platforms;android-36.1" || \
+            "$SDKMANAGER" --sdk_root="$SDK_DIR" --channel=1 "platforms;android-36.1" || true
+
+          echo "Installed Android SDK platforms:"
+          ls -la "$SDK_DIR/platforms" || true
+          echo "Installed Android SDK build-tools:"
+          ls -la "$SDK_DIR/build-tools" || true
+
+      - name: Restore CI Debug Keystore Cache
+        uses: actions/cache@v4
+        with:
+          path: .ci-keystore
+          key: zeroplay-ci-debug-keystore-v1
+
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.3.1
+
+      - name: Prepare Debug Keystore & Environment
+        shell: bash
+        env:
+          SECRET_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SECRET_KEYSTORE_B64}" ]; then
+            echo "${SECRET_KEYSTORE_B64}" | base64 -d > debug.keystore
+            echo "Decoded debug.keystore from GitHub Secret DEBUG_KEYSTORE_BASE64"
+          elif [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+            echo "Decoded debug.keystore from debug.keystore.base64"
+          elif [ -f .ci-keystore/debug.keystore ]; then
+            cp .ci-keystore/debug.keystore debug.keystore
+            echo "Restored debug.keystore from CI cache"
+          elif [ ! -f debug.keystore ]; then
+            echo "Generating stable CI debug.keystore via keytool..."
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Zero Play Debug,O=ZeroPlay,C=US"
+            mkdir -p .ci-keystore
+            cp debug.keystore .ci-keystore/debug.keystore
+          fi
+
+          if [ ! -f .env ] && [ -f .env.example ]; then
+            cp .env.example .env
+          fi
+
+      - name: Compute Monotonic OTA Version & Patch Gradle
+        id: meta
+        shell: bash
+        env:
+          INPUT_VERSION_OVERRIDE: ${{ inputs.version_override }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, pathlib
+
+          gradle_path = pathlib.Path("app/build.gradle.kts")
+          text = gradle_path.read_text(encoding="utf-8")
+
+          m_name = re.search(r'versionName\s*=\s*"([^"]+)"', text)
+          m_code = re.search(r'versionCode\s*=\s*(\d+)', text)
+          base_vname = m_name.group(1) if m_name else "2.1.1"
+          base_vcode = int(m_code.group(1)) if m_code else 4
+          run_num = int(os.environ.get("GITHUB_RUN_NUMBER", "1"))
+          override = os.environ.get("INPUT_VERSION_OVERRIDE", "").strip()
+          github_ref = os.environ.get("GITHUB_REF", "")
+
+          if override:
+              final_vname = override.lstrip("vV")
+              final_vcode = base_vcode + run_num
+              tag = f"v{final_vname}"
+          elif github_ref.startswith("refs/tags/v"):
+              tag = github_ref[len("refs/tags/"):]
+              final_vname = tag.lstrip("vV")
+              final_vcode = base_vcode + run_num
+          else:
+              final_vname = f"{base_vname}.{run_num}"
+              final_vcode = base_vcode + run_num
+              tag = f"v{final_vname}"
+
+          patched = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {final_vcode}', text, count=1)
+          patched = re.sub(r'versionName\s*=\s*"[^"]+"', f'versionName = "{final_vname}"', patched, count=1)
+          gradle_path.write_text(patched, encoding="utf-8")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"version_name={final_vname}\n")
+              f.write(f"version_code={final_vcode}\n")
+              f.write(f"tag={tag}\n")
+              f.write(f"apk_filename=ZeroPlay-{tag}.apk\n")
+
+          print(f"Building Zero Play {final_vname} (versionCode={final_vcode}, tag={tag})")
+          PY
+
+      - name: Build Zero Play APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Package OTA APK & version.json Manifest
+        shell: bash
+        env:
+          META_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          META_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          META_TAG: ${{ steps.meta.outputs.tag }}
+          META_APK_FILENAME: ${{ steps.meta.outputs.apk_filename }}
+          IS_PRERELEASE: ${{ inputs.prerelease == true }}
+        run: |
+          set -euo pipefail
+          mkdir -p release_assets
+          APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
+          APK_DEST="release_assets/${META_APK_FILENAME}"
+          cp "$APK_SRC" "$APK_DEST"
+
+          python3 - <<'PY'
+          import datetime, hashlib, json, os, pathlib
+
+          apk_path = pathlib.Path("release_assets") / os.environ["META_APK_FILENAME"]
+          sha256 = hashlib.sha256(apk_path.read_bytes()).hexdigest()
+          size_bytes = apk_path.stat().st_size
+          tag = os.environ["META_TAG"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha_short = os.environ.get("GITHUB_SHA", "")[:7]
+          prerelease = os.environ.get("IS_PRERELEASE", "false").lower() == "true"
+
+          manifest = {
+              "versionName": os.environ["META_VERSION_NAME"],
+              "versionCode": int(os.environ["META_VERSION_CODE"]),
+              "tagName": tag,
+              "title": f"Zero Play {tag}",
+              "apkUrl": f"https://github.com/{repo}/releases/download/{tag}/{apk_path.name}",
+              "apkSizeBytes": size_bytes,
+              "sha256": sha256,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "prerelease": prerelease,
+              "notes": f"Automated Zero Play OTA build {tag} ({os.environ['META_VERSION_CODE']}) from commit {sha_short}."
+          }
+          pathlib.Path("release_assets/version.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          print(f"Packaged {apk_path.name} ({size_bytes / (1024 * 1024):.2f} MB)")
+          PY
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Zero Play ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            Automated Zero Play OTA APK release for [`${{ github.repository }}`](https://github.com/${{ github.repository }}).
+            - **Version:** `${{ steps.meta.outputs.version_name }}` (`versionCode: ${{ steps.meta.outputs.version_code }}`)
+            - **Commit:** `${{ github.sha }}`
+            - **Engines:** NewPipeExtractor + yt-dlp-android + FFmpegKit full-gpl + Media3 AV1 (`dav1d`) + 8× Parallel Range Accelerator
+            - Install directly or update inside **Zero Play → Settings → Auto update**.
+          prerelease: ${{ inputs.prerelease == true }}
+          files: |
+            release_assets/${{ steps.meta.outputs.apk_filename }}
+            release_assets/version.json

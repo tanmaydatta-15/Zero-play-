@@ -7,9 +7,14 @@
 -keep class org.schabi.newpipe.** { *; }
 -dontwarn org.schabi.newpipe.**
 
-# FFmpegKit (full-gpl) native JNI bindings
+# FFmpegKit (full-gpl) native JNI bindings & smart-exception companion
 -keep class com.arthenica.ffmpegkit.** { *; }
 -dontwarn com.arthenica.ffmpegkit.**
+-keep class com.arthenica.smartexception.** { *; }
+-dontwarn com.arthenica.smartexception.**
+-keepclassmembers class * {
+    native <methods>;
+}
 
 # yt-dlp-android / youtubedl-android native bindings
 -keep class com.yausername.** { *; }

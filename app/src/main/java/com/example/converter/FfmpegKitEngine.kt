@@ -23,10 +23,36 @@ object FfmpegKitEngine {
 
     private val activeSessions = ConcurrentHashMap<String, Long>()
 
+    @Volatile
+    private var initAttempted: Boolean = false
+
+    @Volatile
+    private var initAvailable: Boolean = false
+
+    @Volatile
+    var initFailureReason: String? = null
+        private set
+
     fun ensureInitialized(): Boolean {
-        return runCatching {
-            FFmpegKitConfig.getFFmpegVersion().isNotBlank()
-        }.getOrDefault(false)
+        if (initAttempted) return initAvailable
+        synchronized(this) {
+            if (initAttempted) return initAvailable
+            return try {
+                val version = FFmpegKitConfig.getFFmpegVersion()
+                initAvailable = version.isNotBlank()
+                if (!initAvailable) {
+                    initFailureReason = "FFmpeg native binary returned empty version"
+                }
+                initAttempted = true
+                initAvailable
+            } catch (t: Throwable) {
+                val root = generateSequence(t) { it.cause }.last()
+                initFailureReason = "FFmpeg native engine unavailable (${root.javaClass.simpleName}: ${root.message ?: "failed to load native library"})"
+                initAvailable = false
+                initAttempted = true
+                false
+            }
+        }
     }
 
     fun cancelTask(taskId: String) {
@@ -413,6 +439,9 @@ object FfmpegKitEngine {
         outputFile: File
     ): Result<File> {
         return runCatching {
+            if (!ensureInitialized()) {
+                error(initFailureReason ?: "FFmpeg native engine failed to initialize on this device")
+            }
             val cmd = buildArgsCommand(args)
             val session = FFmpegKit.executeWithArgumentsAsync(
                 args.toTypedArray(),

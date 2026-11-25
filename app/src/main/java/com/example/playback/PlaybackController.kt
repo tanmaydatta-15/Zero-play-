@@ -14,6 +14,7 @@ import android.util.Size
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -34,7 +35,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
@@ -61,8 +61,9 @@ class PlaybackController(
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
     private var progressJob: Job? = null
-    private var playbackLaunchJob: Job? = null
+    private var artworkWarmupJob: Job? = null
     private var pendingQueue: Pair<List<MediaTrack>, Int>? = null
+    private var pendingTrackId: String? = null
     private val artworkByteCache = ConcurrentHashMap<String, ByteArray>()
 
     private val _uiState = MutableStateFlow(PlaybackUiState())
@@ -91,46 +92,88 @@ class PlaybackController(
     private fun attachListener(controller: MediaController) {
         controller.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                _uiState.update { it.copy(isPlaying = isPlaying) }
+                val activeMediaId = controller.currentMediaItem?.mediaId
+                val expectedId = pendingTrackId
+                if (expectedId != null && activeMediaId != null && activeMediaId != expectedId) {
+                    // Ignore stale pause/stop events from the previous track while switching
+                    return
+                }
+                if (activeMediaId == expectedId && isPlaying) {
+                    pendingTrackId = null
+                }
+                _uiState.update { state ->
+                    if (state.currentTrack == null) state
+                    else state.copy(
+                        isPlaying = isPlaying,
+                        isBuffering = if (isPlaying) false else state.isBuffering
+                    )
+                }
                 if (isPlaying) startProgressPolling() else stopProgressPolling()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                val dur = controller.duration.coerceAtLeast(0L)
-                _uiState.update {
-                    it.copy(
+                val activeMediaId = controller.currentMediaItem?.mediaId
+                val expectedId = pendingTrackId
+                if (expectedId != null && activeMediaId != null && activeMediaId != expectedId) {
+                    return
+                }
+                if (playbackState == Player.STATE_READY) {
+                    pendingTrackId = null
+                }
+                val dur = controller.duration.takeIf { it > 0L } ?: 0L
+                _uiState.update { state ->
+                    if (state.currentTrack == null) state
+                    else state.copy(
                         isBuffering = playbackState == Player.STATE_BUFFERING,
-                        durationMs = if (dur > 0) dur else it.currentTrack?.durationMs ?: 0L
+                        durationMs = if (dur > 0L) dur else state.currentTrack.durationMs
                     )
                 }
             }
 
+            override fun onPlayerError(error: PlaybackException) {
+                pendingTrackId = null
+                stopProgressPolling()
+                _uiState.update { state ->
+                    state.copy(isPlaying = false, isBuffering = false)
+                }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                val idx = controller.currentMediaItemIndex
+                val transitionedId = mediaItem?.mediaId
+                val expectedId = pendingTrackId
+                if (expectedId != null && transitionedId != null && transitionedId != expectedId) {
+                    // Ignore intermediate transition emitted from the outgoing track
+                    return
+                }
+                if (transitionedId != null && transitionedId == expectedId) {
+                    pendingTrackId = null
+                }
+
                 val queue = _uiState.value.queue
-                val track = queue.getOrNull(idx)
-                val dur = controller.duration.coerceAtLeast(0L)
+                if (queue.isEmpty() && mediaItem == null) return
+
+                val idx = controller.currentMediaItemIndex
+                val track = transitionedId?.let { id -> queue.firstOrNull { it.id == id } }
+                    ?: queue.getOrNull(idx)
+                    ?: return
+                val resolvedIdx = queue.indexOfFirst { it.id == track.id }.let { if (it >= 0) it else idx }
+                val dur = controller.duration.takeIf { it > 0L } ?: 0L
+
+                val previousTrackId = _uiState.value.currentTrack?.id
                 _uiState.update {
                     it.copy(
-                        currentIndex = idx,
-                        currentTrack = track ?: it.currentTrack,
-                        durationMs = if (dur > 0) dur else track?.durationMs ?: 0L,
+                        currentIndex = resolvedIdx,
+                        currentTrack = track,
+                        durationMs = if (dur > 0L) dur else track.durationMs,
                         positionMs = 0L,
-                        isVideoContent = track?.mediaType == MediaType.VIDEO
+                        isVideoContent = track.mediaType == MediaType.VIDEO
                     )
                 }
-                if (track != null) {
+                if (track.id != previousTrackId) {
                     onTrackStarted(track.id)
-                    if (!artworkByteCache.containsKey(track.id)) {
-                        scope.launch {
-                            val bytes = withContext(Dispatchers.IO) { loadArtworkBytes(track) }
-                            if (bytes != null && controller.currentMediaItemIndex == idx) {
-                                val updatedItem = buildMediaItem(track, bytes)
-                                runCatching { controller.replaceMediaItem(idx, updatedItem) }
-                            }
-                        }
-                    }
                 }
+                // Warm artwork cache in background ONLY for next session/neighbors without calling replaceMediaItem on active playback
+                prewarmNeighborArtwork(queue, resolvedIdx)
             }
 
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -149,12 +192,15 @@ class PlaybackController(
         val controller = mediaController
         if (controller == null) {
             pendingQueue = finalQueue to index
+            pendingTrackId = track.id
             _uiState.update {
                 it.copy(
                     currentTrack = track,
                     queue = finalQueue,
                     currentIndex = index,
                     durationMs = track.durationMs,
+                    positionMs = 0L,
+                    isBuffering = true,
                     isVideoContent = track.mediaType == MediaType.VIDEO
                 )
             }
@@ -168,6 +214,17 @@ class PlaybackController(
         if (tracks.isEmpty()) return
         val safeIdx = startIndex.coerceIn(0, tracks.lastIndex)
         val selected = tracks[safeIdx]
+
+        // Immediately stop stale progress polling so the outgoing track's position never overwrites the new track
+        stopProgressPolling()
+        artworkWarmupJob?.cancel()
+        pendingTrackId = selected.id
+
+        val currentState = _uiState.value
+        val sameQueue = currentState.queue.size == tracks.size &&
+            controller.mediaItemCount == tracks.size &&
+            currentState.queue.indices.all { currentState.queue[it].id == tracks[it].id }
+
         _uiState.update {
             it.copy(
                 currentTrack = selected,
@@ -175,43 +232,58 @@ class PlaybackController(
                 currentIndex = safeIdx,
                 durationMs = selected.durationMs,
                 positionMs = 0L,
+                isBuffering = true,
                 isVideoContent = selected.mediaType == MediaType.VIDEO
             )
         }
-        playbackLaunchJob?.cancel()
-        playbackLaunchJob = scope.launch {
-            val selectedArt = artworkByteCache[selected.id] ?: withTimeoutOrNull(450L) {
-                withContext(Dispatchers.IO) { loadArtworkBytes(selected) }
+
+        if (sameQueue && safeIdx in 0 until controller.mediaItemCount) {
+            // Instant zero-rebuild seek within the already loaded queue
+            controller.seekToDefaultPosition(safeIdx)
+            if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
+                controller.prepare()
             }
-            val mediaItems = tracks.mapIndexed { idx, track ->
-                val artBytes = if (idx == safeIdx) selectedArt else artworkByteCache[track.id]
-                buildMediaItem(track, artBytes)
+            controller.play()
+        } else {
+            // Build and start playback immediately (0ms delay) without blocking on bitmap decoding
+            val mediaItems = tracks.map { track ->
+                buildMediaItem(track, artworkByteCache[track.id])
             }
             controller.setMediaItems(mediaItems, safeIdx, 0L)
             controller.prepare()
             controller.play()
-            onTrackStarted(selected.id)
-            startProgressPolling()
+        }
 
-            // Pre-warm artwork bytes for neighboring queue items
-            launch(Dispatchers.IO) {
-                val neighborIndices = listOf(safeIdx + 1, safeIdx - 1, safeIdx + 2)
-                    .filter { it in tracks.indices && !artworkByteCache.containsKey(tracks[it].id) }
-                for (nIdx in neighborIndices) {
-                    val neighbor = tracks[nIdx]
-                    val bytes = loadArtworkBytes(neighbor)
-                    if (bytes != null) {
-                        withContext(Dispatchers.Main) {
-                            if (_uiState.value.queue.getOrNull(nIdx)?.id == neighbor.id) {
-                                runCatching {
-                                    controller.replaceMediaItem(nIdx, buildMediaItem(neighbor, bytes))
-                                }
-                            }
-                        }
-                    }
-                }
+        onTrackStarted(selected.id)
+        prewarmNeighborArtwork(tracks, safeIdx)
+    }
+
+    private fun prewarmNeighborArtwork(tracks: List<MediaTrack>, currentIdx: Int) {
+        artworkWarmupJob?.cancel()
+        artworkWarmupJob = scope.launch(Dispatchers.IO) {
+            val indices = listOf(currentIdx, currentIdx + 1, currentIdx - 1, currentIdx + 2)
+                .filter { it in tracks.indices && !artworkByteCache.containsKey(tracks[it].id) }
+            for (idx in indices) {
+                if (!isActive) break
+                loadArtworkBytes(tracks[idx])
             }
         }
+    }
+
+    fun dismissPlayback() {
+        pendingQueue = null
+        pendingTrackId = null
+        artworkWarmupJob?.cancel()
+        artworkWarmupJob = null
+        stopProgressPolling()
+        mediaController?.let { controller ->
+            runCatching {
+                controller.pause()
+                controller.stop()
+                controller.clearMediaItems()
+            }
+        }
+        _uiState.value = PlaybackUiState()
     }
 
     fun playNextInQueue(track: MediaTrack) {
@@ -228,16 +300,7 @@ class PlaybackController(
         _uiState.update { it.copy(queue = currentQueue) }
         if (!artworkByteCache.containsKey(track.id)) {
             scope.launch(Dispatchers.IO) {
-                val bytes = loadArtworkBytes(track)
-                if (bytes != null) {
-                    withContext(Dispatchers.Main) {
-                        if (_uiState.value.queue.getOrNull(insertIndex)?.id == track.id) {
-                            runCatching {
-                                controller.replaceMediaItem(insertIndex, buildMediaItem(track, bytes))
-                            }
-                        }
-                    }
-                }
+                loadArtworkBytes(track)
             }
         }
     }
@@ -395,21 +458,72 @@ class PlaybackController(
 
     fun skipNext() {
         val controller = mediaController ?: return
+        val queue = _uiState.value.queue
         if (controller.hasNextMediaItem()) {
+            val nextIdx = controller.nextMediaItemIndex
+            queue.getOrNull(nextIdx)?.let { nextTrack ->
+                stopProgressPolling()
+                pendingTrackId = nextTrack.id
+                _uiState.update {
+                    it.copy(
+                        currentTrack = nextTrack,
+                        currentIndex = nextIdx,
+                        durationMs = nextTrack.durationMs,
+                        positionMs = 0L,
+                        isBuffering = true,
+                        isVideoContent = nextTrack.mediaType == MediaType.VIDEO
+                    )
+                }
+            }
             controller.seekToNextMediaItem()
+            if (!controller.playWhenReady) controller.play()
         } else if (controller.mediaItemCount > 0) {
+            queue.firstOrNull()?.let { firstTrack ->
+                stopProgressPolling()
+                pendingTrackId = firstTrack.id
+                _uiState.update {
+                    it.copy(
+                        currentTrack = firstTrack,
+                        currentIndex = 0,
+                        durationMs = firstTrack.durationMs,
+                        positionMs = 0L,
+                        isBuffering = true,
+                        isVideoContent = firstTrack.mediaType == MediaType.VIDEO
+                    )
+                }
+            }
             controller.seekTo(0, 0L)
+            if (!controller.playWhenReady) controller.play()
         }
     }
 
     fun skipPrevious() {
         val controller = mediaController ?: return
+        val queue = _uiState.value.queue
         if (controller.currentPosition > 3000L) {
             controller.seekTo(0L)
+            _uiState.update { it.copy(positionMs = 0L) }
         } else if (controller.hasPreviousMediaItem()) {
+            val prevIdx = controller.previousMediaItemIndex
+            queue.getOrNull(prevIdx)?.let { prevTrack ->
+                stopProgressPolling()
+                pendingTrackId = prevTrack.id
+                _uiState.update {
+                    it.copy(
+                        currentTrack = prevTrack,
+                        currentIndex = prevIdx,
+                        durationMs = prevTrack.durationMs,
+                        positionMs = 0L,
+                        isBuffering = true,
+                        isVideoContent = prevTrack.mediaType == MediaType.VIDEO
+                    )
+                }
+            }
             controller.seekToPreviousMediaItem()
+            if (!controller.playWhenReady) controller.play()
         } else {
             controller.seekTo(0L)
+            _uiState.update { it.copy(positionMs = 0L) }
         }
     }
 
@@ -441,12 +555,15 @@ class PlaybackController(
                 queue = updatedQueue
             )
         }
+        // Only replace non-active queue items so active playback never stutters or restarts
         val controller = mediaController ?: return
         val idx = _uiState.value.queue.indexOfFirst { it.id == updated.id }
-        if (idx in 0 until controller.mediaItemCount) {
+        if (idx in 0 until controller.mediaItemCount && idx != controller.currentMediaItemIndex) {
             scope.launch {
                 val bytes = withContext(Dispatchers.IO) { loadArtworkBytes(updated) }
-                runCatching { controller.replaceMediaItem(idx, buildMediaItem(updated, bytes)) }
+                if (idx != controller.currentMediaItemIndex && _uiState.value.queue.getOrNull(idx)?.id == updated.id) {
+                    runCatching { controller.replaceMediaItem(idx, buildMediaItem(updated, bytes)) }
+                }
             }
         }
     }
@@ -476,13 +593,14 @@ class PlaybackController(
         progressJob = scope.launch {
             while (isActive) {
                 val controller = mediaController
-                if (controller != null) {
+                if (controller != null && _uiState.value.currentTrack != null && pendingTrackId == null) {
                     val pos = controller.currentPosition.coerceAtLeast(0L)
-                    val dur = controller.duration.coerceAtLeast(0L)
-                    _uiState.update {
-                        it.copy(
+                    val dur = controller.duration.takeIf { it > 0L } ?: 0L
+                    _uiState.update { state ->
+                        if (state.currentTrack == null) state
+                        else state.copy(
                             positionMs = pos,
-                            durationMs = if (dur > 0) dur else it.durationMs,
+                            durationMs = if (dur > 0L) dur else state.durationMs,
                             isPlaying = controller.isPlaying
                         )
                     }

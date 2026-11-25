@@ -16,7 +16,6 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.example.MainActivity
 import com.example.data.local.PreferencesManager
-import com.example.diagnostics.DeviceCapabilityInspector
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
@@ -49,16 +48,17 @@ class EchoMediaSessionService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        // Prefer Media3 AV1 dav1d software extension renderer when hardware AV1 decoding isn't present
-        val av1SwOnly = runCatching { DeviceCapabilityInspector.isAv1SoftwareOnly(this) }.getOrDefault(false)
-        val extensionMode = if (av1SwOnly) {
-            DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-        } else {
-            DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+        // Use hardware MediaCodec decoders first for instant, glitch-free track switching,
+        // falling back seamlessly to NextLib software decoders (e.g. AV1 / exotic audio) only when needed.
+        val renderersFactory = runCatching {
+            NextRenderersFactory(this)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                .setEnableDecoderFallback(true)
+        }.getOrElse {
+            DefaultRenderersFactory(this)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                .setEnableDecoderFallback(true)
         }
-        val renderersFactory = NextRenderersFactory(this)
-            .setExtensionRendererMode(extensionMode)
-            .setEnableDecoderFallback(true)
 
         val player = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(audioAttributes, true)

@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -286,13 +288,20 @@ fun EchoMusicApp(
                                 .navigationBarsPadding()
                                 .padding(bottom = 8.dp)
                         ) {
-                            EchoMiniPlayerBar(
-                                playbackState = playbackState,
-                                showProgressBar = settings.showMiniProgressBar,
-                                onExpand = { viewModel.setPlayerExpanded(true) },
-                                onTogglePlayPause = { viewModel.playbackController.togglePlayPause() },
-                                onSkipNext = { viewModel.playbackController.skipNext() }
-                            )
+                            AnimatedVisibility(
+                                visible = playbackState.currentTrack != null,
+                                enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
+                                exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut()
+                            ) {
+                                EchoMiniPlayerBar(
+                                    playbackState = playbackState,
+                                    showProgressBar = settings.showMiniProgressBar,
+                                    onExpand = { viewModel.setPlayerExpanded(true) },
+                                    onTogglePlayPause = { viewModel.playbackController.togglePlayPause() },
+                                    onSkipNext = { viewModel.playbackController.skipNext() },
+                                    onDismiss = viewModel::dismissPlayback
+                                )
+                            }
                             if (!useNavigationRail) {
                                 EchoFloatingPillNavBar(
                                     currentTab = currentTab,

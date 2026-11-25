@@ -39,11 +39,11 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Transform
 import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -582,6 +582,7 @@ fun EchoMiniPlayerBar(
     onExpand: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
+    onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val track = playbackState.currentTrack ?: return
@@ -589,41 +590,77 @@ fun EchoMiniPlayerBar(
         (playbackState.positionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
 
+    val pillShape = RoundedCornerShape(26.dp)
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(pillShape)
             .clickable(onClick = onExpand)
             .testTag("mini_player_bar"),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
-        tonalElevation = 8.dp,
-        shadowElevation = 8.dp
+        shape = pillShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.97f),
+        border = BorderStroke(
+            1.dp,
+            Brush.horizontalGradient(
+                colors = listOf(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.34f),
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f)
+                )
+            )
+        ),
+        tonalElevation = 10.dp,
+        shadowElevation = 12.dp
     ) {
-        Column {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
+                            MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.98f)
+                        )
+                    )
+                )
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.40f),
-                                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f)
-                            )
-                        )
-                    )
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = if (showProgressBar) 6.dp else 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TrackArtwork(
-                    track = track,
-                    cornerRadius = 12.dp,
-                    modifier = Modifier.size(44.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
+                Box(contentAlignment = Alignment.Center) {
+                    TrackArtwork(
+                        track = track,
+                        cornerRadius = 14.dp,
+                        modifier = Modifier.size(44.dp)
+                    )
+                    if (playbackState.isBuffering && !playbackState.isPlaying) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color.Black.copy(alpha = 0.48f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                strokeWidth = 2.dp,
+                                color = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(11.dp))
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                ) {
                     Text(
                         text = track.title,
                         style = MaterialTheme.typography.titleSmall,
@@ -634,22 +671,40 @@ fun EchoMiniPlayerBar(
                     )
                     Text(
                         text = "${cleanArtistLabel(track)} • ${formatTrackQualityBadge(track)}",
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(
-                    onClick = onTogglePlayPause,
-                    modifier = Modifier.testTag("mini_player_play_pause")
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Primary Play / Pause inside a sleek tonal circular button
+                Box(
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .clip(CircleShape)
+                        .clickable(onClick = onTogglePlayPause)
+                        .testTag("mini_player_play_pause"),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = stringResource(R.string.action_play_pause),
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (playbackState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = stringResource(R.string.action_play_pause),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
                 }
+
                 IconButton(
                     onClick = onSkipNext,
                     modifier = Modifier.testTag("mini_player_next")
@@ -657,19 +712,50 @@ fun EchoMiniPlayerBar(
                     Icon(
                         imageVector = Icons.Rounded.SkipNext,
                         contentDescription = stringResource(R.string.action_skip_next),
-                        tint = MaterialTheme.colorScheme.onSurface
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                // Close / Dismiss (X) button to stop playback and remove the mini-player pill
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.testTag("mini_player_dismiss")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close player",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
+
             if (showProgressBar) {
-                LinearProgressIndicator(
-                    progress = { progress },
+                // Inset rounded progress track so it aligns gracefully with the pill corners
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(2.5.dp),
-                    color = MaterialTheme.colorScheme.secondary,
-                    trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                )
+                        .padding(start = 18.dp, end = 18.dp, bottom = 5.dp)
+                        .height(2.5.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress)
+                            .height(2.5.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.colorScheme.secondary
+                                    )
+                                )
+                            )
+                    )
+                }
             }
         }
     }

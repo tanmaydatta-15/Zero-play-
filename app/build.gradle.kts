@@ -136,6 +136,8 @@ dependencies {
   implementation(libs.androidx.media3.transformer)
   implementation(libs.androidx.media3.effect)
   implementation(libs.androidx.media3.common)
+  // Keep FFmpegKit full-gpl declared before other native AARs so its 16KB-aligned libc++_shared.so & libav*.so take priority
+  implementation(libs.ffmpeg.kit.full.gpl)
   implementation(libs.nextlib.media3ext)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.kotlinx.coroutines.android)
@@ -145,7 +147,6 @@ dependencies {
   // implementation(libs.youtubedl.ffmpeg)
   implementation(libs.newpipe.extractor)
   implementation(libs.okhttp)
-  implementation(libs.ffmpeg.kit.full.gpl)
   coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

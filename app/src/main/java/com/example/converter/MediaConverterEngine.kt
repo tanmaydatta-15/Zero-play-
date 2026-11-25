@@ -395,47 +395,73 @@ class MediaConverterEngine(
         repository.upsertConversionJob(baseJob)
 
         val tempIn = File(context.cacheDir, "aud_in_${System.currentTimeMillis()}.${name.substringAfterLast('.', "mp4")}")
-        val tempOut = File(context.cacheDir, "aud_out_${System.currentTimeMillis()}.${targetFormat.ext}")
+        var effectiveFormat = targetFormat
+        var tempOut = File(context.cacheDir, "aud_out_${System.currentTimeMillis()}.${effectiveFormat.ext}")
         try {
-            copyUriToFile(uri, tempIn)
-            coroutineScope {
-                var lastEmitMs = 0L
-                FfmpegKitEngine.convertOrExtractAudio(
-                    taskId = jobId,
-                    inputFile = tempIn,
-                    outputFile = tempOut,
-                    targetFormat = targetFormat,
-                    mp3Bitrate = mp3Bitrate,
-                    title = name.substringBeforeLast('.'),
-                    artist = "Zero Play Exported",
-                    expectedDurationMs = metrics.durationMs
-                ) { p ->
-                    val now = System.currentTimeMillis()
-                    if (now - lastEmitMs >= 250L || p >= 0.96f) {
-                        lastEmitMs = now
-                        launch(Dispatchers.IO) {
-                            repository.upsertConversionJob(baseJob.copy(progress = p.coerceIn(0.05f, 0.96f)))
+            if (FfmpegKitEngine.ensureInitialized()) {
+                copyUriToFile(uri, tempIn)
+                coroutineScope {
+                    var lastEmitMs = 0L
+                    FfmpegKitEngine.convertOrExtractAudio(
+                        taskId = jobId,
+                        inputFile = tempIn,
+                        outputFile = tempOut,
+                        targetFormat = effectiveFormat,
+                        mp3Bitrate = mp3Bitrate,
+                        title = name.substringBeforeLast('.'),
+                        artist = "Zero Play Exported",
+                        expectedDurationMs = metrics.durationMs
+                    ) { p ->
+                        val now = System.currentTimeMillis()
+                        if (now - lastEmitMs >= 250L || p >= 0.96f) {
+                            lastEmitMs = now
+                            launch(Dispatchers.IO) {
+                                repository.upsertConversionJob(baseJob.copy(progress = p.coerceIn(0.05f, 0.96f)))
+                            }
                         }
+                    }.getOrThrow()
+                }
+            } else {
+                // Native FFmpegKit unavailable on this ABI/device — fall back cleanly to Media3 Transformer AAC (.m4a)
+                effectiveFormat = AudioTargetFormat.M4A
+                tempOut = File(context.cacheDir, "aud_out_${System.currentTimeMillis()}.m4a")
+                repository.upsertConversionJob(
+                    baseJob.copy(
+                        title = "${name.substringBeforeLast('.')} -> M4A",
+                        detailLabel = "M4A (AAC) via Media3 Transformer"
+                    )
+                )
+                runTransformerOnMain(
+                    inputUri = uri,
+                    outputFile = tempOut,
+                    removeVideo = true,
+                    removeAudio = false,
+                    targetHeight = 0,
+                    targetBitrate = 0,
+                    videoMimeType = MimeTypes.VIDEO_H264,
+                    onProgress = { p ->
+                        repository.upsertConversionJob(baseJob.copy(progress = p.coerceIn(0.05f, 0.96f)))
                     }
-                }.getOrThrow()
+                )
             }
 
-            val outName = "ZeroPlay_${name.substringBeforeLast('.')}_audio.${targetFormat.ext}"
+            val outName = "ZeroPlay_${name.substringBeforeLast('.')}_audio.${effectiveFormat.ext}"
             val savedUri = withContext(Dispatchers.IO) {
-                saveFileToMediaStoreAudio(outName, targetFormat.mimeType, tempOut)
+                saveFileToMediaStoreAudio(outName, effectiveFormat.mimeType, tempOut)
             }
             val sizeAfter = tempOut.length()
             repository.registerExportedMedia(
                 trackId = "exp_aud_${System.currentTimeMillis()}",
                 title = outName.substringBeforeLast('.'),
-                artist = "Exported Audio • ${targetFormat.ext.uppercase()}",
+                artist = "Exported Audio • ${effectiveFormat.ext.uppercase()}",
                 uriString = savedUri.toString(),
                 mediaType = MediaType.AUDIO,
-                mimeType = targetFormat.mimeType,
+                mimeType = effectiveFormat.mimeType,
                 sizeBytes = sizeAfter
             )
             repository.upsertConversionJob(
                 baseJob.copy(
+                    title = "${name.substringBeforeLast('.')} -> ${effectiveFormat.ext.uppercase()}",
                     progress = 1f,
                     status = JobStatus.COMPLETED,
                     outputUriString = savedUri.toString(),
@@ -446,7 +472,7 @@ class MediaConverterEngine(
             repository.upsertConversionJob(
                 baseJob.copy(
                     status = JobStatus.FAILED,
-                    errorMessage = t.message ?: "Audio conversion failed"
+                    errorMessage = t.message?.takeIf { it.isNotBlank() } ?: "Audio conversion failed"
                 )
             )
         } finally {

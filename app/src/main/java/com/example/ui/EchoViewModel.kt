@@ -966,14 +966,24 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
         val s = settings.value
         val activeQueue = if (s.excludeExplicit) queue.filterNot { it.title.contains("explicit", ignoreCase = true) }.ifEmpty { queue } else queue
         playbackController.playTrack(track, activeQueue)
-        playbackController.setPlaybackSpeed(s.defaultSpeed)
-        playbackController.applyAudioEngineSettings(s.skipSilence, s.pauseOnHeadsetDisconnect)
-        playbackController.applyEqualizerState(s.toEqualizerState())
+        if (kotlin.math.abs(playbackState.value.playbackSpeed - s.defaultSpeed) > 0.01f) {
+            playbackController.setPlaybackSpeed(s.defaultSpeed)
+        }
         if (track.mediaType == MediaType.VIDEO) {
             _uiState.update { it.copy(isPlayerExpanded = true) }
         } else {
             _uiState.update { it.copy(isFullScreenVideo = false) }
         }
+    }
+
+    fun dismissPlayback() {
+        _uiState.update {
+            it.copy(
+                isPlayerExpanded = false,
+                isFullScreenVideo = false
+            )
+        }
+        playbackController.dismissPlayback()
     }
 
     fun playNextInQueue(track: MediaTrack) {

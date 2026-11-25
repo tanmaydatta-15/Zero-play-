@@ -546,6 +546,16 @@ class PlaybackController(
         }
     }
 
+    fun setRepeatMode(repeatMode: Int) {
+        val controller = mediaController ?: return
+        controller.repeatMode = repeatMode
+        _uiState.update { it.copy(repeatMode = repeatMode) }
+    }
+
+    fun pause() {
+        mediaController?.pause()
+    }
+
     fun updateCurrentTrackMetadata(updated: MediaTrack) {
         artworkByteCache.remove(updated.id)
         _uiState.update { state ->

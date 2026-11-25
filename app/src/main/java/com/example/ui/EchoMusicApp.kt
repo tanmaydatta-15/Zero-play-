@@ -505,18 +505,32 @@ fun EchoMusicApp(
         AnimatedVisibility(
             visible = (uiState.isPlayerExpanded || uiState.isInPipMode) && playbackState.currentTrack != null,
             enter = slideInVertically(initialOffsetY = { it }),
-            exit = slideOutVertically(targetOffsetY = { it })
+            exit = slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier.fillMaxSize()
         ) {
             if (playbackState.currentTrack?.mediaType == MediaType.VIDEO) {
+                val videoLibrary = remember(tracks) {
+                    tracks.filter { it.mediaType == MediaType.VIDEO }
+                }
                 VideoPlayerScreen(
                     playbackState = playbackState,
                     player = viewModel.playbackController.playerOrNull,
+                    allVideos = videoLibrary,
                     isFullScreen = uiState.isFullScreenVideo,
                     isInPipMode = uiState.isInPipMode,
                     onBack = { viewModel.setPlayerExpanded(false) },
                     onTogglePlayPause = { viewModel.playbackController.togglePlayPause() },
+                    onPause = { viewModel.playbackController.pause() },
                     onSeekTo = { viewModel.playbackController.seekTo(it) },
+                    onSkipNext = { viewModel.playbackController.skipNext() },
+                    onSkipPrevious = { viewModel.playbackController.skipPrevious() },
                     onSetSpeed = { viewModel.playbackController.setPlaybackSpeed(it) },
+                    onSetRepeatMode = { viewModel.playbackController.setRepeatMode(it) },
+                    onToggleLike = viewModel::toggleLike,
+                    onAddToPlaylist = viewModel::openPlaylistPickerForTrack,
+                    onSelectVideo = { selectedVideo ->
+                        viewModel.playTrack(selectedVideo, videoLibrary.ifEmpty { listOf(selectedVideo) })
+                    },
                     onToggleFullScreen = { viewModel.setFullScreenVideo(!uiState.isFullScreenVideo) },
                     onEnterPipMode = onEnterPipMode
                 )

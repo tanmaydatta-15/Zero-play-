@@ -164,6 +164,8 @@ fun NowPlayingScreen(
     onConvertOrExtract: (MediaTrack) -> Unit,
     onAddToPlaylist: (MediaTrack) -> Unit,
     onSelectQueueTrack: (MediaTrack) -> Unit,
+    onOpenEqualizer: () -> Unit = {},
+    onOpenSongInfo: (MediaTrack) -> Unit = {},
     onOpenSettings: () -> Unit = {}
 ) {
     val track = playbackState.currentTrack ?: return
@@ -347,6 +349,8 @@ fun NowPlayingScreen(
                         onOpenSongDna = { showSongDnaSheet = true },
                         onConvertOrExtract = { onConvertOrExtract(track) },
                         onAddToPlaylist = { onAddToPlaylist(track) },
+                        onOpenEqualizer = onOpenEqualizer,
+                        onOpenSongInfo = { onOpenSongInfo(track) },
                         onOpenSettings = onOpenSettings
                     )
 
@@ -406,6 +410,8 @@ private fun PlayerMainPage(
     onOpenSongDna: () -> Unit,
     onConvertOrExtract: () -> Unit,
     onAddToPlaylist: () -> Unit,
+    onOpenEqualizer: () -> Unit,
+    onOpenSongInfo: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Column(
@@ -753,8 +759,26 @@ private fun PlayerMainPage(
                         onDismissRequest = { onMoreMenuExpandedChange(false) }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Song DNA & Info") },
+                            text = { Text("Song info") },
                             leadingIcon = { Icon(Icons.Rounded.Info, null) },
+                            onClick = {
+                                onMoreMenuExpandedChange(false)
+                                onOpenSongInfo()
+                            },
+                            modifier = Modifier.testTag("now_playing_menu_song_info")
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Equalizer") },
+                            leadingIcon = { Icon(Icons.Rounded.GraphicEq, null) },
+                            onClick = {
+                                onMoreMenuExpandedChange(false)
+                                onOpenEqualizer()
+                            },
+                            modifier = Modifier.testTag("now_playing_menu_equalizer")
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Song DNA") },
+                            leadingIcon = { Icon(Icons.Rounded.AutoAwesome, null) },
                             onClick = {
                                 onMoreMenuExpandedChange(false)
                                 onOpenSongDna()

@@ -90,6 +90,7 @@ class EchoRepository(
                 MediaStore.Audio.Media.ALBUM,
                 MediaStore.Audio.Media.DURATION,
                 MediaStore.Audio.Media.DATE_ADDED,
+                MediaStore.Audio.Media.DATE_MODIFIED,
                 MediaStore.Audio.Media.MIME_TYPE,
                 MediaStore.Audio.Media.SIZE,
                 MediaStore.Audio.Media.ALBUM_ID,
@@ -108,6 +109,7 @@ class EchoRepository(
                 val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                 val durCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+                val modCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
                 val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
                 val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
                 val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
@@ -124,7 +126,7 @@ class EchoRepository(
                         android.net.Uri.parse("content://media/external/audio/albumart"),
                         albumId
                     ).toString()
-                    val relPath = if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else ""
+                    val relPath = if (pathCol >= 0) cursor.getString(pathCol).orEmpty().trimEnd('/') else ""
                     val mime = cursor.getString(mimeCol) ?: "audio/mpeg"
                     val source = when {
                         relPath.contains("ZeroPlay", ignoreCase = true) ||
@@ -134,6 +136,8 @@ class EchoRepository(
                         relPath.contains("Download", ignoreCase = true) -> "DOWNLOADED"
                         else -> "LOCAL"
                     }
+                    val dateAddedMs = cursor.getLong(dateCol) * 1000L
+                    val dateModMs = if (modCol >= 0) cursor.getLong(modCol) * 1000L else dateAddedMs
                     discovered += TrackRecordEntity(
                         trackId = "local_audio_$mediaId",
                         title = cursor.getString(titleCol)?.takeIf { it.isNotBlank() && !it.equals("<unknown>", ignoreCase = true) } ?: "Audio Track $mediaId",
@@ -148,9 +152,11 @@ class EchoRepository(
                         moodTag = "Feel good",
                         playCount = 0,
                         isLiked = false,
-                        dateAdded = cursor.getLong(dateCol) * 1000L,
+                        dateAdded = dateAddedMs,
+                        dateModified = dateModMs,
                         mimeType = mime,
-                        sizeBytes = cursor.getLong(sizeCol)
+                        sizeBytes = cursor.getLong(sizeCol),
+                        folderPath = relPath.ifBlank { "Music" }
                     )
                     count++
                 }
@@ -190,7 +196,7 @@ class EchoRepository(
                     val mediaId = cursor.getLong(idCol)
                     val duration = cursor.getLong(durCol)
                     val contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaId)
-                    val relPath = if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else ""
+                    val relPath = if (pathCol >= 0) cursor.getString(pathCol).orEmpty().trimEnd('/') else ""
                     val source = when {
                         relPath.contains("ZeroPlay", ignoreCase = true) ||
                             relPath.contains("EchoMusic", ignoreCase = true) -> "EXPORTED"
@@ -215,7 +221,8 @@ class EchoRepository(
                         isLiked = false,
                         dateAdded = cursor.getLong(dateCol) * 1000L,
                         mimeType = cursor.getString(mimeCol) ?: "video/mp4",
-                        sizeBytes = cursor.getLong(sizeCol)
+                        sizeBytes = cursor.getLong(sizeCol),
+                        folderPath = relPath.ifBlank { "Movies" }
                     )
                     count++
                 }
@@ -280,7 +287,8 @@ class EchoRepository(
                         isLiked = false,
                         dateAdded = (if (dateCol >= 0) cursor.getLong(dateCol) else 0L) * 1000L,
                         mimeType = mime,
-                        sizeBytes = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
+                        sizeBytes = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L,
+                        folderPath = relPath.trimEnd('/').ifBlank { "ZeroPlay" }
                     )
                 }
             }
@@ -411,6 +419,32 @@ class EchoRepository(
         dao.clearConversionJobs()
     }
 
+    suspend fun updateTrackMetadata(
+        trackId: String,
+        tags: com.example.metadata.EditableAudioTags,
+        artworkUriString: String?
+    ): MediaTrack? = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        dao.updateTrackMetadata(
+            trackId = trackId,
+            title = tags.title.trim().ifBlank { "Untitled" },
+            album = tags.album.trim(),
+            artist = tags.artist.trim().ifBlank { "Unknown Artist" },
+            albumArtist = tags.albumArtist.trim(),
+            composer = tags.composer.trim(),
+            genre = tags.genre.trim(),
+            lyricist = tags.lyricist.trim(),
+            trackNumber = tags.trackNumber.trim(),
+            discNumber = tags.discNumber.trim(),
+            year = tags.year.trim(),
+            comment = tags.comment.trim(),
+            embeddedLyrics = tags.embeddedLyrics,
+            artworkUriString = artworkUriString,
+            dateModified = now
+        )
+        dao.getTrackById(trackId)?.toDomain()
+    }
+
     private fun TrackRecordEntity.toDomain(): MediaTrack {
         val cleanArtist = artist.takeIf { it.isNotBlank() && !it.equals("<unknown>", ignoreCase = true) }
             ?: if (mediaType == "VIDEO") "Local Video" else "Local Audio"
@@ -425,6 +459,11 @@ class EchoRepository(
             resId = MediaCatalogSeed.getArtworkResForTrack(trackId) ?: artworkResId,
             fallback = defaultCover
         )
+        val parsedLyrics = if (embeddedLyrics.isNotBlank()) {
+            com.example.metadata.AudioMetadataEngine.parseLyricsText(embeddedLyrics, durationMs)
+        } else {
+            MediaCatalogSeed.getLyricsForTrack(trackId)
+        }
         return MediaTrack(
             id = trackId,
             title = title,
@@ -440,9 +479,21 @@ class EchoRepository(
             playCount = playCount,
             isLiked = isLiked,
             dateAdded = dateAdded,
+            lastPlayedAt = lastPlayedAt,
+            dateModified = dateModified,
             mimeType = mimeType,
             sizeBytes = sizeBytes,
-            lyrics = MediaCatalogSeed.getLyricsForTrack(trackId)
+            lyrics = parsedLyrics,
+            albumArtist = albumArtist,
+            composer = composer,
+            genre = genre,
+            lyricist = lyricist,
+            trackNumber = trackNumber,
+            discNumber = discNumber,
+            year = year,
+            comment = comment,
+            embeddedLyrics = embeddedLyrics,
+            folderPath = folderPath
         )
     }
 

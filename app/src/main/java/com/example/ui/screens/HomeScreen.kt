@@ -55,6 +55,7 @@ fun HomeScreen(
     currentTrackId: String?,
     onTopBarAction: (EchoTopSheetType) -> Unit,
     onLogoClick: () -> Unit = {},
+    onOpenDrawer: () -> Unit = {},
     onOpenDownloader: () -> Unit = {},
     onRescanMedia: () -> Unit = {},
     onOpenCodecDiagnostics: () -> Unit = {},
@@ -63,6 +64,7 @@ fun HomeScreen(
     onAddToPlaylist: (MediaTrack) -> Unit,
     onToggleLike: (MediaTrack) -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
+    onShowSongInfo: (MediaTrack) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val downloadedAndExported = tracks.filter {
@@ -82,7 +84,8 @@ fun HomeScreen(
             EchoTopBar(
                 title = stringResource(R.string.app_name),
                 onActionClick = onTopBarAction,
-                onLogoClick = onLogoClick
+                onLogoClick = onLogoClick,
+                onMenuClick = onOpenDrawer
             )
         }
 
@@ -152,7 +155,8 @@ fun HomeScreen(
                                 onPlayNext = { onPlayNext(track) },
                                 onAddToPlaylist = { onAddToPlaylist(track) },
                                 onToggleLike = { onToggleLike(track) },
-                                onConvertOrExtract = { onConvertOrExtract(track) }
+                                onConvertOrExtract = { onConvertOrExtract(track) },
+                                onSongInfo = { onShowSongInfo(track) }
                             )
                         }
                     }
@@ -187,7 +191,8 @@ fun HomeScreen(
                                 onPlayNext = { onPlayNext(track) },
                                 onAddToPlaylist = { onAddToPlaylist(track) },
                                 onToggleLike = { onToggleLike(track) },
-                                onConvertOrExtract = { onConvertOrExtract(track) }
+                                onConvertOrExtract = { onConvertOrExtract(track) },
+                                onSongInfo = { onShowSongInfo(track) }
                             )
                         }
                     }

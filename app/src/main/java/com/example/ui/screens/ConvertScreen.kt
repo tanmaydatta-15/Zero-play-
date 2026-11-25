@@ -88,6 +88,7 @@ fun ConvertScreen(
     onDismissDownload: (String) -> Unit = {},
     onTopBarAction: (EchoTopSheetType) -> Unit,
     onLogoClick: () -> Unit = {},
+    onOpenDrawer: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var jobForComparison by remember { mutableStateOf<ConversionJobUi?>(null) }
@@ -102,7 +103,8 @@ fun ConvertScreen(
             EchoTopBar(
                 title = stringResource(R.string.convert_title),
                 onActionClick = onTopBarAction,
-                onLogoClick = onLogoClick
+                onLogoClick = onLogoClick,
+                onMenuClick = onOpenDrawer
             )
         }
 

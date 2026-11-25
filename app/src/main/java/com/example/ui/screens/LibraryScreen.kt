@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,6 +38,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Outbox
 import androidx.compose.material.icons.rounded.Refresh
@@ -84,6 +89,7 @@ private val libraryFilterChips = listOf("Playlists", "Songs", "Albums", "Artists
 fun LibraryScreen(
     tracks: List<MediaTrack>,
     playlists: List<PlaylistUi>,
+    artistArtworks: Map<String, String> = emptyMap(),
     currentTrackId: String?,
     selectedChip: String,
     sortOption: LibrarySortOption,
@@ -99,21 +105,37 @@ fun LibraryScreen(
     onRescanMedia: () -> Unit,
     onTopBarAction: (EchoTopSheetType) -> Unit,
     onLogoClick: () -> Unit = {},
+    onOpenDrawer: () -> Unit = {},
     onPlayTrack: (MediaTrack, List<MediaTrack>) -> Unit,
     onPlayNext: (MediaTrack) -> Unit,
     onAddToPlaylist: (MediaTrack) -> Unit,
     onToggleLike: (MediaTrack) -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
+    onShowSongInfo: (MediaTrack) -> Unit = {},
+    onChangeArtistImage: (String, Uri) -> Unit = { _, _ -> },
+    onRequestPrefetchArtists: (List<String>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isGridView by rememberSaveable { mutableStateOf(true) }
     var selectedArtistName by rememberSaveable { mutableStateOf<String?>(null) }
 
+    val artistDetailImagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val artist = selectedArtistName
+        if (uri != null && !artist.isNullOrBlank()) {
+            onChangeArtistImage(artist, uri)
+        }
+    }
+
     if (selectedArtistName != null) {
         val artistName = selectedArtistName!!
         BackHandler { selectedArtistName = null }
         val artistTracks = sortTracks(
-            tracks.filter { cleanArtistLabel(it) == artistName },
+            tracks.filter {
+                it.artist.trim().ifBlank { "Unknown Artist" } == artistName ||
+                    cleanArtistLabel(it) == artistName
+            },
             sortOption,
             sortAscending
         )
@@ -127,6 +149,23 @@ fun LibraryScreen(
             onAddToPlaylist = onAddToPlaylist,
             onToggleLike = onToggleLike,
             onConvertOrExtract = onConvertOrExtract,
+            onShowSongInfo = onShowSongInfo,
+            trailingHeaderAction = {
+                IconButton(
+                    onClick = {
+                        artistDetailImagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    modifier = Modifier.testTag("artist_detail_change_image_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Image,
+                        contentDescription = "Change artist image",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
             modifier = modifier
         )
         return
@@ -154,6 +193,7 @@ fun LibraryScreen(
             onAddToPlaylist = onAddToPlaylist,
             onToggleLike = onToggleLike,
             onConvertOrExtract = onConvertOrExtract,
+            onShowSongInfo = onShowSongInfo,
             modifier = modifier
         )
         return
@@ -173,6 +213,7 @@ fun LibraryScreen(
                 onAddToPlaylist = onAddToPlaylist,
                 onToggleLike = onToggleLike,
                 onConvertOrExtract = onConvertOrExtract,
+                onShowSongInfo = onShowSongInfo,
                 modifier = modifier
             )
             return
@@ -180,6 +221,62 @@ fun LibraryScreen(
     }
 
     val sortedTracks = sortTracks(tracks, sortOption, sortAscending)
+
+    val libraryChipsRow: @Composable () -> Unit = {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(libraryFilterChips) { chip ->
+                val selected = selectedChip == chip
+                FilterChip(
+                    selected = selected,
+                    onClick = { onSelectChip(chip) },
+                    label = {
+                        Text(
+                            text = chip,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    },
+                    shape = CircleShape,
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        labelColor = MaterialTheme.colorScheme.onSurface,
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selected,
+                        borderColor = MaterialTheme.colorScheme.outlineVariant,
+                        selectedBorderColor = Color.Transparent
+                    ),
+                    modifier = Modifier.testTag("library_chip_${chip.lowercase()}")
+                )
+            }
+        }
+    }
+
+    if (selectedChip == "Artists") {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .testTag("library_screen")
+        ) {
+            ArtistsTabContent(
+                tracks = tracks,
+                artistArtworks = artistArtworks,
+                onOpenDrawer = onOpenDrawer,
+                onSelectArtist = { name, _ -> selectedArtistName = name },
+                onChangeArtistImage = onChangeArtistImage,
+                onRequestPrefetchArtists = onRequestPrefetchArtists,
+                chipsSlot = libraryChipsRow,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        return
+    }
 
     Box(
         modifier = modifier
@@ -194,45 +291,14 @@ fun LibraryScreen(
                 EchoTopBar(
                     title = stringResource(R.string.library_title),
                     onActionClick = onTopBarAction,
-                    onLogoClick = onLogoClick
+                    onLogoClick = onLogoClick,
+                    onMenuClick = onOpenDrawer
                 )
             }
 
             // Filter Chips Row
             item {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(libraryFilterChips) { chip ->
-                        val selected = selectedChip == chip
-                        FilterChip(
-                            selected = selected,
-                            onClick = { onSelectChip(chip) },
-                            label = {
-                                Text(
-                                    text = chip,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            shape = CircleShape,
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                labelColor = MaterialTheme.colorScheme.onSurface,
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = selected,
-                                borderColor = MaterialTheme.colorScheme.outlineVariant,
-                                selectedBorderColor = Color.Transparent
-                            ),
-                            modifier = Modifier.testTag("library_chip_${chip.lowercase()}")
-                        )
-                    }
-                }
+                libraryChipsRow()
             }
 
             // Sort Pill Button + Circular Ascending/Descending Button
@@ -492,7 +558,8 @@ fun LibraryScreen(
                             onPlayNext = onPlayNext,
                             onAddToPlaylist = onAddToPlaylist,
                             onToggleLike = onToggleLike,
-                            onConvertOrExtract = onConvertOrExtract
+                            onConvertOrExtract = onConvertOrExtract,
+                            onShowSongInfo = onShowSongInfo
                         )
                     }
                 }
@@ -680,7 +747,8 @@ fun LibraryScreen(
                                 onPlayNext = onPlayNext,
                                 onAddToPlaylist = onAddToPlaylist,
                                 onToggleLike = onToggleLike,
-                                onConvertOrExtract = onConvertOrExtract
+                                onConvertOrExtract = onConvertOrExtract,
+                                onShowSongInfo = onShowSongInfo
                             )
                         }
                     }
@@ -819,6 +887,8 @@ private fun LibraryDetailList(
     onAddToPlaylist: (MediaTrack) -> Unit,
     onToggleLike: (MediaTrack) -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
+    onShowSongInfo: (MediaTrack) -> Unit = {},
+    trailingHeaderAction: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -845,6 +915,7 @@ private fun LibraryDetailList(
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.weight(1f)
                 )
+                trailingHeaderAction?.invoke()
             }
         }
         item {
@@ -861,7 +932,8 @@ private fun LibraryDetailList(
                     onPlayNext = onPlayNext,
                     onAddToPlaylist = onAddToPlaylist,
                     onToggleLike = onToggleLike,
-                    onConvertOrExtract = onConvertOrExtract
+                    onConvertOrExtract = onConvertOrExtract,
+                    onShowSongInfo = onShowSongInfo
                 )
             }
         }
@@ -876,7 +948,8 @@ private fun GroupedTrackSectionList(
     onPlayNext: (MediaTrack) -> Unit,
     onAddToPlaylist: (MediaTrack) -> Unit,
     onToggleLike: (MediaTrack) -> Unit,
-    onConvertOrExtract: (MediaTrack) -> Unit
+    onConvertOrExtract: (MediaTrack) -> Unit,
+    onShowSongInfo: (MediaTrack) -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -894,7 +967,8 @@ private fun GroupedTrackSectionList(
                 onPlayNext = { onPlayNext(track) },
                 onAddToPlaylist = { onAddToPlaylist(track) },
                 onToggleLike = { onToggleLike(track) },
-                onConvertOrExtract = { onConvertOrExtract(track) }
+                onConvertOrExtract = { onConvertOrExtract(track) },
+                onSongInfo = { onShowSongInfo(track) }
             )
         }
     }

@@ -40,10 +40,12 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.Transform
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
@@ -52,12 +54,14 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,15 +80,21 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.local.ThemeModePref
 import com.example.data.model.MediaType
+import com.example.ui.components.DrawerDestination
 import com.example.ui.components.EchoMiniPlayerBar
+import com.example.ui.components.EchoNavigationDrawerSheet
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.AutoUpdateScreen
 import com.example.ui.screens.ConvertScreen
+import com.example.ui.screens.EqualizerScreen
+import com.example.ui.screens.FoldersScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LibraryScreen
+import com.example.ui.screens.ListeningStatsScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.TagEditorScreen
 import com.example.ui.screens.VideoPlayerScreen
 import com.example.ui.sheets.AddToPlaylistDialog
 import com.example.ui.sheets.AudioExtractorSheet
@@ -93,7 +103,9 @@ import com.example.ui.sheets.CreatePlaylistDialog
 import com.example.ui.sheets.EchoTopActionSheet
 import com.example.ui.sheets.MediaDownloaderSheet
 import com.example.ui.sheets.PhotoConverterSheet
+import com.example.ui.sheets.SongInfoBottomSheet
 import com.example.ui.sheets.VideoCompressorSheet
+import kotlinx.coroutines.launch
 
 enum class EchoTab(
     val labelRes: Int,
@@ -116,6 +128,7 @@ fun EchoMusicApp(
     val view = LocalView.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val tracks by viewModel.allTracks.collectAsStateWithLifecycle()
+    val artistArtworks by viewModel.artistArtworks.collectAsStateWithLifecycle()
     val chartTracks by viewModel.filteredCharts.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val conversionJobs by viewModel.conversionJobs.collectAsStateWithLifecycle()
@@ -132,6 +145,20 @@ fun EchoMusicApp(
 
     var currentTab by rememberSaveable { mutableStateOf(EchoTab.HOME) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
+    val folderCount = remember(tracks) {
+        tracks.map { it.folderPath.trimEnd('/').ifBlank { "Internal Storage" } }.distinct().size
+    }
+    val activeDrawerDestination = when {
+        uiState.showFoldersScreen -> DrawerDestination.FOLDERS
+        uiState.showEqualizerScreen -> DrawerDestination.EQUALIZER
+        uiState.showListeningStatsScreen -> DrawerDestination.LISTENING_STATS
+        uiState.showSettingsScreen -> DrawerDestination.SETTINGS
+        uiState.showAboutScreen -> DrawerDestination.ABOUT
+        else -> DrawerDestination.LIBRARY
+    }
 
     val shouldKeepScreenOn = settings.keepScreenOn && playbackState.isPlaying
     DisposableEffect(view, shouldKeepScreenOn) {
@@ -176,9 +203,53 @@ fun EchoMusicApp(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val useNavigationRail = maxWidth >= 680.dp
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = !uiState.isPlayerExpanded &&
+            !uiState.showSettingsScreen &&
+            !uiState.showAboutScreen &&
+            !uiState.showAutoUpdateScreen &&
+            !uiState.showEqualizerScreen &&
+            !uiState.showFoldersScreen &&
+            !uiState.showListeningStatsScreen &&
+            uiState.tagEditorTrack == null,
+        drawerContent = {
+            EchoNavigationDrawerSheet(
+                totalTracksCount = tracks.size,
+                folderCount = folderCount,
+                activeDestination = activeDrawerDestination,
+                onSelectDestination = { dest ->
+                    scope.launch { drawerState.close() }
+                    when (dest) {
+                        DrawerDestination.LIBRARY -> {
+                            viewModel.openFolders(false)
+                            viewModel.openEqualizer(false)
+                            viewModel.openListeningStats(false)
+                            viewModel.openSettings(false)
+                            viewModel.openAbout(false)
+                            currentTab = EchoTab.LIBRARY
+                        }
+                        DrawerDestination.FOLDERS -> viewModel.openFolders(true)
+                        DrawerDestination.QUEUE -> {
+                            if (playbackState.currentTrack != null) {
+                                viewModel.setPlayerExpanded(true)
+                            } else {
+                                viewModel.showStatus("Start playing a track to view the queue")
+                            }
+                        }
+                        DrawerDestination.EQUALIZER -> viewModel.openEqualizer(true)
+                        DrawerDestination.LISTENING_STATS -> viewModel.openListeningStats(true)
+                        DrawerDestination.SCAN_MEDIA -> viewModel.rescanMediaStore()
+                        DrawerDestination.SETTINGS -> viewModel.openSettings(true)
+                        DrawerDestination.ABOUT -> viewModel.openAbout(true)
+                    }
+                }
+            )
+        }
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val useNavigationRail = maxWidth >= 680.dp
 
             Row(modifier = Modifier.fillMaxSize()) {
                 if (useNavigationRail) {
@@ -317,6 +388,7 @@ fun EchoMusicApp(
                                 currentTrackId = playbackState.currentTrack?.id,
                                 onTopBarAction = viewModel::openTopSheet,
                                 onLogoClick = { viewModel.openAbout(true) },
+                                onOpenDrawer = openDrawer,
                                 onOpenDownloader = { viewModel.openDownloadSheet() },
                                 onRescanMedia = viewModel::rescanMediaStore,
                                 onOpenCodecDiagnostics = { viewModel.openDeviceInfo(true) },
@@ -332,6 +404,7 @@ fun EchoMusicApp(
                                         viewModel.openAudioExtractor()
                                     }
                                 },
+                                onShowSongInfo = viewModel::openSongInfo,
                                 modifier = contentModifier
                             )
 
@@ -342,6 +415,7 @@ fun EchoMusicApp(
                                 onSearchQueryChange = viewModel::updateSearchQuery,
                                 onOpenDownloaderSheet = viewModel::openDownloadSheet,
                                 onOpenCodecDiagnostics = { viewModel.openDeviceInfo(true) },
+                                onOpenDrawer = openDrawer,
                                 onPlayTrack = viewModel::playTrack,
                                 onPlayNext = viewModel::playNextInQueue,
                                 onAddToPlaylist = viewModel::openPlaylistPickerForTrack,
@@ -354,6 +428,7 @@ fun EchoMusicApp(
                                         viewModel.openAudioExtractor()
                                     }
                                 },
+                                onShowSongInfo = viewModel::openSongInfo,
                                 modifier = contentModifier
                             )
 
@@ -369,12 +444,14 @@ fun EchoMusicApp(
                                 onDismissDownload = viewModel::dismissDownload,
                                 onTopBarAction = viewModel::openTopSheet,
                                 onLogoClick = { viewModel.openAbout(true) },
+                                onOpenDrawer = openDrawer,
                                 modifier = contentModifier
                             )
 
                             EchoTab.LIBRARY -> LibraryScreen(
                                 tracks = tracks,
                                 playlists = playlists,
+                                artistArtworks = artistArtworks,
                                 currentTrackId = playbackState.currentTrack?.id,
                                 selectedChip = uiState.selectedLibraryChip,
                                 sortOption = uiState.librarySortOption,
@@ -390,6 +467,7 @@ fun EchoMusicApp(
                                 onRescanMedia = viewModel::rescanMediaStore,
                                 onTopBarAction = viewModel::openTopSheet,
                                 onLogoClick = { viewModel.openAbout(true) },
+                                onOpenDrawer = openDrawer,
                                 onPlayTrack = viewModel::playTrack,
                                 onPlayNext = viewModel::playNextInQueue,
                                 onAddToPlaylist = viewModel::openPlaylistPickerForTrack,
@@ -402,6 +480,9 @@ fun EchoMusicApp(
                                         viewModel.openAudioExtractor()
                                     }
                                 },
+                                onShowSongInfo = viewModel::openSongInfo,
+                                onChangeArtistImage = viewModel::saveManualArtistImage,
+                                onRequestPrefetchArtists = viewModel::prefetchArtistImages,
                                 modifier = contentModifier
                             )
                         }
@@ -462,12 +543,49 @@ fun EchoMusicApp(
                     onSelectQueueTrack = { track ->
                         viewModel.playTrack(track, playbackState.queue)
                     },
+                    onOpenEqualizer = {
+                        viewModel.openEqualizer(true)
+                    },
+                    onOpenSongInfo = viewModel::openSongInfo,
                     onOpenSettings = {
                         viewModel.setPlayerExpanded(false)
                         viewModel.openSettings(true)
                     }
                 )
             }
+        }
+
+        // Full-Screen Folders Overlay
+        AnimatedVisibility(
+            visible = uiState.showFoldersScreen && !uiState.isInPipMode,
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it })
+        ) {
+            FoldersScreen(
+                tracks = tracks,
+                currentTrackId = playbackState.currentTrack?.id,
+                onPlayTrack = viewModel::playTrack,
+                onPlayNext = viewModel::playNextInQueue,
+                onToggleLike = viewModel::toggleLike,
+                onAddToPlaylist = viewModel::openPlaylistPickerForTrack,
+                onShowSongInfo = viewModel::openSongInfo,
+                onBack = { viewModel.openFolders(false) }
+            )
+        }
+
+        // Full-Screen Listening Stats Overlay
+        AnimatedVisibility(
+            visible = uiState.showListeningStatsScreen && !uiState.isInPipMode,
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it })
+        ) {
+            ListeningStatsScreen(
+                tracks = tracks,
+                currentTrackId = playbackState.currentTrack?.id,
+                onPlayTrack = viewModel::playTrack,
+                onShowSongInfo = viewModel::openSongInfo,
+                onBack = { viewModel.openListeningStats(false) }
+            )
         }
 
         // Full-Screen Settings Overlay
@@ -483,6 +601,26 @@ fun EchoMusicApp(
                 conversionCount = conversionJobs.size,
                 viewModel = viewModel,
                 onBack = { viewModel.openSettings(false) }
+            )
+        }
+
+        // Full-Screen 10-Band Equalizer & Audio Effects Overlay
+        AnimatedVisibility(
+            visible = uiState.showEqualizerScreen && !uiState.isInPipMode,
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it })
+        ) {
+            EqualizerScreen(
+                state = settings.toEqualizerState(),
+                onToggleMaster = viewModel::setEqEnabled,
+                onSelectPreset = viewModel::selectEqPreset,
+                onChangeBandDb = viewModel::setEqBandDb,
+                onToggleBassBoost = viewModel::setEqBassBoostEnabled,
+                onChangeBassBoostStrength = viewModel::setEqBassBoostStrength,
+                onToggleVirtualizer = viewModel::setEqVirtualizerEnabled,
+                onChangeVirtualizerStrength = viewModel::setEqVirtualizerStrength,
+                onResetFlat = viewModel::resetEqualizerFlat,
+                onBack = { viewModel.openEqualizer(false) }
             )
         }
 
@@ -516,6 +654,7 @@ fun EchoMusicApp(
                 latestGitHubRelease = uiState.latestGitHubRelease,
                 isDownloadingUpdate = uiState.isDownloadingUpdate,
                 updateDownloadProgress = uiState.updateDownloadProgress,
+                updateDownloadStage = uiState.updateDownloadStage,
                 downloadedApkPath = uiState.downloadedApkPath,
                 needsInstallPermission = uiState.needsInstallPermission,
                 onToggleAutoUpdate = viewModel::setAutoUpdateEnabled,
@@ -527,6 +666,25 @@ fun EchoMusicApp(
                 onOpenUnknownSourcesSettings = viewModel::openUnknownSourcesSettings,
                 onBack = { viewModel.openAutoUpdate(false) }
             )
+        }
+
+        // Full-Screen Audio Tag Editor Overlay
+        AnimatedVisibility(
+            visible = uiState.tagEditorTrack != null && !uiState.isInPipMode,
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it })
+        ) {
+            uiState.tagEditorTrack?.let { editTrack ->
+                TagEditorScreen(
+                    track = editTrack,
+                    initialMetadata = uiState.tagEditorInitialMetadata,
+                    onSaveCompleted = { tags, artUri, writtenToFile ->
+                        viewModel.onTagEditorSaved(editTrack, tags, artUri, writtenToFile)
+                    },
+                    onShowMessage = viewModel::showStatus,
+                    onBack = viewModel::dismissTagEditor
+                )
+            }
         }
 
         // Bottom Sheets & Dialogs
@@ -612,6 +770,15 @@ fun EchoMusicApp(
             )
         }
 
+        uiState.songInfoTrack?.let { infoTrack ->
+            val liveTrack = tracks.find { it.id == infoTrack.id } ?: infoTrack
+            SongInfoBottomSheet(
+                track = liveTrack,
+                onEditTags = { details -> viewModel.openTagEditor(liveTrack, details) },
+                onDismiss = viewModel::dismissSongInfo
+            )
+        }
+
         uiState.activeTopSheet?.let { sheetType ->
             EchoTopActionSheet(
                 sheetType = sheetType,
@@ -627,6 +794,7 @@ fun EchoMusicApp(
                 onOpenFullSettings = { viewModel.openSettings(true) },
                 onDismiss = { viewModel.openTopSheet(null) }
             )
+        }
         }
     }
 }

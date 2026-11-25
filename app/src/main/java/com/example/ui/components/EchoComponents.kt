@@ -30,6 +30,8 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -127,6 +129,7 @@ fun EchoTopBar(
     title: String,
     onActionClick: (EchoTopSheetType) -> Unit,
     onLogoClick: () -> Unit = {},
+    onMenuClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -135,6 +138,19 @@ fun EchoTopBar(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (onMenuClick != null) {
+            IconButton(
+                onClick = onMenuClick,
+                modifier = Modifier.testTag("topbar_drawer_menu_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Menu,
+                    contentDescription = "Open navigation menu",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+        }
         Box(
             modifier = Modifier
                 .size(34.dp)
@@ -323,10 +339,11 @@ fun GroupedTrackRow(
     leadingRank: Int? = null,
     subtitleOverride: String? = null,
     onClick: () -> Unit,
-    onPlayNext: () -> Unit,
-    onAddToPlaylist: () -> Unit,
-    onToggleLike: () -> Unit,
-    onConvertOrExtract: () -> Unit,
+    onPlayNext: () -> Unit = {},
+    onAddToPlaylist: () -> Unit = {},
+    onToggleLike: () -> Unit = {},
+    onConvertOrExtract: () -> Unit = {},
+    onSongInfo: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -477,6 +494,15 @@ fun GroupedTrackRow(
                             menuExpanded = false
                             onToggleLike()
                         }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Song info") },
+                        leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onSongInfo()
+                        },
+                        modifier = Modifier.testTag("track_menu_song_info_${track.id}")
                     )
                     DropdownMenuItem(
                         text = { Text("Convert / Extract Audio") },

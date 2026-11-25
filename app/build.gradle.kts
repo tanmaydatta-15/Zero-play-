@@ -20,11 +20,16 @@ android {
     versionName = "2.1.1"
     buildConfigField("long", "BUILD_TIMESTAMP_MS", "${System.currentTimeMillis()}L")
 
-    ndk {
-      abiFilters += listOf("arm64-v8a", "x86_64")
-    }
-
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a")
+      isUniversalApk = true
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

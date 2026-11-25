@@ -56,9 +56,21 @@ data class MediaTrack(
     val playCount: Int = 0,
     val isLiked: Boolean = false,
     val dateAdded: Long = System.currentTimeMillis(),
+    val lastPlayedAt: Long = 0L,
+    val dateModified: Long = 0L,
     val mimeType: String = "audio/wav",
     val sizeBytes: Long = 0L,
-    val lyrics: List<LyricLine> = emptyList()
+    val lyrics: List<LyricLine> = emptyList(),
+    val albumArtist: String = "",
+    val composer: String = "",
+    val genre: String = "",
+    val lyricist: String = "",
+    val trackNumber: String = "",
+    val discNumber: String = "",
+    val year: String = "",
+    val comment: String = "",
+    val embeddedLyrics: String = "",
+    val folderPath: String = ""
 ) {
     /**
      * Derives accurate format/codec badges (`AV1`, `OPUS`, `MKV`, `MP3`, `MP4`, `FLAC`, `HEVC`, `VP9`, `M4A`)

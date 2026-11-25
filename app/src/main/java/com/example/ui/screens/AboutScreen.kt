@@ -478,7 +478,7 @@ fun AboutScreen(
 
                 item {
                     Text(
-                        text = "Built to Rebel",
+                        text = "Unified",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

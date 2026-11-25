@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -14,21 +15,31 @@ import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.example.MainActivity
+import com.example.data.local.PreferencesManager
 import com.example.diagnostics.DeviceCapabilityInspector
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class EchoMediaSessionService : MediaSessionService() {
 
     companion object {
         const val CMD_SET_SKIP_SILENCE = "com.example.playback.SET_SKIP_SILENCE"
         const val CMD_SET_NOISY_PAUSE = "com.example.playback.SET_NOISY_PAUSE"
+        const val CMD_APPLY_AUDIO_EFFECTS = "com.example.playback.APPLY_AUDIO_EFFECTS"
         const val EXTRA_ENABLED = "enabled"
     }
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var mediaSession: MediaSession? = null
     private var exoPlayer: ExoPlayer? = null
+    private val audioEffectsController = AudioEffectsController()
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -55,6 +66,26 @@ class EchoMediaSessionService : MediaSessionService() {
             .build()
         exoPlayer = player
 
+        // Bind DSP Equalizer, BassBoost, and Virtualizer directly to ExoPlayer's audio session ID
+        if (player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            audioEffectsController.attachToSession(player.audioSessionId)
+        }
+        player.addListener(object : Player.Listener {
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                if (audioSessionId != C.AUDIO_SESSION_ID_UNSET && audioSessionId > 0) {
+                    audioEffectsController.attachToSession(audioSessionId)
+                }
+            }
+        })
+
+        // Restore persisted equalizer state immediately on service start
+        serviceScope.launch {
+            runCatching {
+                val saved = PreferencesManager(applicationContext).settings.first()
+                audioEffectsController.applyState(saved.toEqualizerState())
+            }
+        }
+
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -73,6 +104,7 @@ class EchoMediaSessionService : MediaSessionService() {
                 val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                     .add(SessionCommand(CMD_SET_SKIP_SILENCE, Bundle.EMPTY))
                     .add(SessionCommand(CMD_SET_NOISY_PAUSE, Bundle.EMPTY))
+                    .add(SessionCommand(CMD_APPLY_AUDIO_EFFECTS, Bundle.EMPTY))
                     .build()
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                     .setAvailableSessionCommands(sessionCommands)
@@ -89,6 +121,15 @@ class EchoMediaSessionService : MediaSessionService() {
                 when (customCommand.customAction) {
                     CMD_SET_SKIP_SILENCE -> exoPlayer?.skipSilenceEnabled = enabled
                     CMD_SET_NOISY_PAUSE -> exoPlayer?.setHandleAudioBecomingNoisy(enabled)
+                    CMD_APPLY_AUDIO_EFFECTS -> {
+                        val eqState = EqualizerState.fromBundle(args)
+                        exoPlayer?.audioSessionId?.let { sid ->
+                            if (sid != C.AUDIO_SESSION_ID_UNSET && sid > 0) {
+                                audioEffectsController.attachToSession(sid)
+                            }
+                        }
+                        audioEffectsController.applyState(eqState)
+                    }
                 }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
@@ -112,6 +153,8 @@ class EchoMediaSessionService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        audioEffectsController.release()
+        serviceScope.cancel()
         mediaSession?.run {
             player.release()
             release()

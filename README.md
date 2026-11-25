@@ -1,11 +1,11 @@
 <div align="center">
   <img src="app/src/main/res/drawable/ic_zero_play_logo.png" alt="Zero Play Logo" width="128" height="128" />
   <h1>Zero Play</h1>
-  <p><strong>Built to Unified</strong> — An all-in-one Android Audio Player, Video Player, Media Downloader, and Photo/Video/Audio Converter built with Kotlin &amp; Jetpack Compose.</p>
+  <p><strong>Unified</strong> — An all-in-one Android Audio Player, Video Player, Media Downloader, and Photo/Video/Audio Converter built with Kotlin &amp; Jetpack Compose.</p>
 
   <p>
-    <a href="https://github.com/nilimadas567345-sudo/Zero-play-/releases">
-      <img src="https://img.shields.io/github/v/release/nilimadas567345-sudo/Zero-play-?include_prereleases&style=for-the-badge&color=FF5A1F&label=Latest%20APK" alt="Latest Release" />
+    <a href="https://github.com/tanmaydatta-15/Zero-play-/releases">
+      <img src="https://img.shields.io/github/v/release/tanmaydatta-15/Zero-play-?include_prereleases&style=for-the-badge&color=FF5A1F&label=Latest%20APK" alt="Latest Release" />
     </a>
     <img src="https://img.shields.io/badge/Kotlin-2.0%2B-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" alt="Kotlin" />
     <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
@@ -23,7 +23,7 @@
 **Zero Play** delivers a clean, ad-free mobile media suite powered by Jetpack Compose and AndroidX Media3. Designed with Material 3 Expressive surfaces, it unifies offline & stream audio/video playback, real-time synchronized lyrics, Picture-in-Picture video, direct media stream downloading, hardware-accelerated media conversion, and built-in GitHub self-updates in a single native Android APK.
 
 > [!NOTE]
-> **Built-In GitHub Self-Update:** Zero Play checks [`nilimadas567345-sudo/Zero-play-`](https://github.com/nilimadas567345-sudo/Zero-play-/releases) directly inside **Settings → Auto update** (supporting both **Stable** and **Preview** channels) and can download & launch the system APK installer automatically.
+> **Built-In GitHub Self-Update:** Zero Play checks [`tanmaydatta-15/Zero-play-`](https://github.com/tanmaydatta-15/Zero-play-/releases) directly inside **Settings → Auto update** (supporting both **Stable** and **Preview** channels) and supports Play Store-style binary delta patching.
 
 ---
 
@@ -84,7 +84,7 @@
 <summary><strong>Customization & Self-Update Engine</strong></summary>
 
 - **Themes:** Material 3 Expressive with **System**, **Light**, **Dark**, **Pure Black AMOLED**, and **Material You Dynamic Color**.
-- **In-App Auto Update:** Pre-configured for [`nilimadas567345-sudo/Zero-play-`](https://github.com/nilimadas567345-sudo/Zero-play-) with **Stable** and **Preview** channels, background update checks, APK download progress, and native Android `FileProvider` self-installation.
+- **In-App Auto Update:** Pre-configured for [`tanmaydatta-15/Zero-play-`](https://github.com/tanmaydatta-15/Zero-play-) with **Stable** and **Preview** channels, background update checks, per-ABI delta patch downloads, SHA-256 verification, and native Android `PackageInstaller` installation.
 
 </details>
 
@@ -94,7 +94,7 @@
 
 ### Android Installation
 
-1. Download the latest pre-compiled APK from the [**Releases Page**](https://github.com/nilimadas567345-sudo/Zero-play-/releases).
+1. Download the latest pre-compiled APK from the [**Releases Page**](https://github.com/tanmaydatta-15/Zero-play-/releases).
 2. Install the APK on your Android device (`Android 7.0+` / API 24+).
 3. Once installed, open **Settings → Auto update** to receive future releases directly inside the app.
 
@@ -102,7 +102,7 @@
 <summary><strong>Building from Source</strong></summary>
 
 ```bash
-git clone https://github.com/nilimadas567345-sudo/Zero-play-.git
+git clone https://github.com/tanmaydatta-15/Zero-play-.git
 cd Zero-play-
 base64 -d debug.keystore.base64 > debug.keystore
 gradle assembleDebug
@@ -118,10 +118,10 @@ Automated builds are also configured in [`.github/workflows/release-apk.yml`](.g
 
 ## Developed & Designed By
 
-**Tanmay Datta** — *Built to Rebel*
+**Tanmay Datta** — *Unified*
 
 - Instagram: [@tanmay.sudo](https://www.instagram.com/tanmay.sudo?dmpr=MXdncXZob2xja2k2dA==)
-- Repository: [nilimadas567345-sudo/Zero-play-](https://github.com/nilimadas567345-sudo/Zero-play-)
+- Repository: [tanmaydatta-15/Zero-play-](https://github.com/tanmaydatta-15/Zero-play-)
 
 ---
 
@@ -156,5 +156,5 @@ The software is provided **"AS IS"**, without warranty of any kind. Users are so
 ---
 
 <p align="center">
-  Licensed under <a href="LICENSE">GPL-3.0</a> • Built to Unified 
+  Licensed under <a href="LICENSE">GPL-3.0</a> • Unified
 </p>

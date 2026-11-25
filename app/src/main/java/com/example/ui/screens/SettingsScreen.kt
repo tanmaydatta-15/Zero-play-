@@ -201,7 +201,7 @@ fun SettingsScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Built to Rebel • $trackCount tracks • $playlistCount playlists",
+                                text = "Unified • $trackCount tracks • $playlistCount playlists",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -349,7 +349,21 @@ fun SettingsScreen(
                     ) {
                         SettingsClickRow(
                             index = 0,
-                            total = 14,
+                            total = 15,
+                            icon = Icons.Rounded.GraphicEq,
+                            title = "10-Band Equalizer & Effects",
+                            subtitle = if (settings.eqEnabled) {
+                                "${settings.eqPreset.label} • Bass Boost & Surround"
+                            } else {
+                                "Off • Tap to configure 10-band EQ"
+                            },
+                            onClick = { viewModel.openEqualizer(true) },
+                            showChevron = true,
+                            testTag = "setting_equalizer"
+                        )
+                        SettingsClickRow(
+                            index = 1,
+                            total = 15,
                             icon = Icons.Rounded.HighQuality,
                             title = "Audio Playback Quality",
                             subtitle = settings.audioQuality.label,
@@ -357,8 +371,8 @@ fun SettingsScreen(
                             testTag = "setting_audio_quality"
                         )
                         SettingsClickRow(
-                            index = 1,
-                            total = 14,
+                            index = 2,
+                            total = 15,
                             icon = Icons.Rounded.Speed,
                             title = "Default Playback Speed",
                             subtitle = "${settings.defaultSpeed}x",
@@ -366,8 +380,8 @@ fun SettingsScreen(
                             testTag = "setting_playback_speed"
                         )
                         SettingsClickRow(
-                            index = 2,
-                            total = 14,
+                            index = 3,
+                            total = 15,
                             icon = Icons.Rounded.Tune,
                             title = "Track Crossfade",
                             subtitle = settings.crossfade.label,
@@ -375,8 +389,8 @@ fun SettingsScreen(
                             testTag = "setting_crossfade"
                         )
                         SettingsSwitchRow(
-                            index = 3,
-                            total = 14,
+                            index = 4,
+                            total = 15,
                             icon = Icons.Rounded.FastForward,
                             title = "Skip Silence",
                             subtitle = "Automatically skip silent gaps inside ExoPlayer",
@@ -385,8 +399,8 @@ fun SettingsScreen(
                             testTag = "setting_skip_silence"
                         )
                         SettingsSwitchRow(
-                            index = 4,
-                            total = 14,
+                            index = 5,
+                            total = 15,
                             icon = Icons.Rounded.VolumeUp,
                             title = "Normalize Audio Volume",
                             subtitle = "Keep perceived loudness balanced across tracks",
@@ -395,8 +409,8 @@ fun SettingsScreen(
                             testTag = "setting_normalize_volume"
                         )
                         SettingsSwitchRow(
-                            index = 5,
-                            total = 14,
+                            index = 6,
+                            total = 15,
                             icon = Icons.Rounded.GraphicEq,
                             title = "Music Flow Continuous Queue",
                             subtitle = "Gapless transition across station tracks",
@@ -405,8 +419,8 @@ fun SettingsScreen(
                             testTag = "setting_gapless_flow"
                         )
                         SettingsSwitchRow(
-                            index = 6,
-                            total = 14,
+                            index = 7,
+                            total = 15,
                             icon = Icons.Rounded.HeadsetOff,
                             title = "Pause on Headset Disconnect",
                             subtitle = "Stop playback immediately when audio output unplugs",
@@ -415,8 +429,8 @@ fun SettingsScreen(
                             testTag = "setting_headset_pause"
                         )
                         SettingsSwitchRow(
-                            index = 7,
-                            total = 14,
+                            index = 8,
+                            total = 15,
                             icon = Icons.Rounded.ScreenLockPortrait,
                             title = "Keep Screen On",
                             subtitle = "Prevent display sleep while audio or video is playing",
@@ -425,8 +439,8 @@ fun SettingsScreen(
                             testTag = "setting_keep_screen_on"
                         )
                         SettingsSwitchRow(
-                            index = 8,
-                            total = 14,
+                            index = 9,
+                            total = 15,
                             icon = Icons.Rounded.Lyrics,
                             title = "Word-by-Word Lyrics Highlight",
                             subtitle = "Animate each word smoothly during synced lyrics",
@@ -435,8 +449,8 @@ fun SettingsScreen(
                             testTag = "setting_word_lyrics"
                         )
                         SettingsClickRow(
-                            index = 9,
-                            total = 14,
+                            index = 10,
+                            total = 15,
                             icon = Icons.Rounded.MusicNote,
                             title = "Lyrics Provider Priority",
                             subtitle = settings.lyricsPriority.label,
@@ -444,8 +458,8 @@ fun SettingsScreen(
                             testTag = "setting_lyrics_priority"
                         )
                         SettingsClickRow(
-                            index = 10,
-                            total = 14,
+                            index = 11,
+                            total = 15,
                             icon = Icons.Rounded.Public,
                             title = "Charts Country / Region",
                             subtitle = settings.chartRegion.label,
@@ -453,8 +467,8 @@ fun SettingsScreen(
                             testTag = "setting_chart_region"
                         )
                         SettingsSwitchRow(
-                            index = 11,
-                            total = 14,
+                            index = 12,
+                            total = 15,
                             icon = Icons.Rounded.Explicit,
                             title = "Filter Explicit Tracks",
                             subtitle = "Skip tracks tagged explicit in auto queues",
@@ -463,8 +477,8 @@ fun SettingsScreen(
                             testTag = "setting_exclude_explicit"
                         )
                         SettingsSwitchRow(
-                            index = 12,
-                            total = 14,
+                            index = 13,
+                            total = 15,
                             icon = Icons.Rounded.PictureInPictureAlt,
                             title = "Auto Picture-in-Picture",
                             subtitle = "Enter floating PiP when leaving active video playback",
@@ -473,8 +487,8 @@ fun SettingsScreen(
                             testTag = "setting_auto_pip"
                         )
                         SettingsSwitchRow(
-                            index = 13,
-                            total = 14,
+                            index = 14,
+                            total = 15,
                             icon = Icons.Rounded.QueueMusic,
                             title = "Persistent Queue",
                             subtitle = "Remember active queue order between sessions",
@@ -835,7 +849,17 @@ fun SettingsScreen(
                     ) {
                         SettingsSwitchRow(
                             index = 0,
-                            total = 6,
+                            total = 7,
+                            icon = Icons.Rounded.Image,
+                            title = "Auto-download artist images",
+                            subtitle = "Fetch & cache circular artist portraits offline when connected",
+                            checked = settings.autoDownloadArtistImages,
+                            onCheckedChange = viewModel::setAutoDownloadArtistImages,
+                            testTag = "setting_auto_download_artist_images"
+                        )
+                        SettingsSwitchRow(
+                            index = 1,
+                            total = 7,
                             icon = Icons.Rounded.Savings,
                             title = "Smart Storage Guard (<10% Skip)",
                             subtitle = "Skip saving compressed outputs with under 10% savings",
@@ -844,8 +868,8 @@ fun SettingsScreen(
                             testTag = "setting_skip_small"
                         )
                         SettingsSwitchRow(
-                            index = 1,
-                            total = 6,
+                            index = 2,
+                            total = 7,
                             icon = Icons.Rounded.Refresh,
                             title = "Auto-Scan MediaStore on Launch",
                             subtitle = "Discover local device audio and video automatically",
@@ -854,8 +878,8 @@ fun SettingsScreen(
                             testTag = "setting_auto_scan"
                         )
                         SettingsClickRow(
-                            index = 2,
-                            total = 6,
+                            index = 3,
+                            total = 7,
                             icon = Icons.Rounded.Storage,
                             title = "Max Offline Cache Size",
                             subtitle = settings.cacheLimit.label,
@@ -863,8 +887,8 @@ fun SettingsScreen(
                             testTag = "setting_cache_limit"
                         )
                         SettingsClickRow(
-                            index = 3,
-                            total = 6,
+                            index = 4,
+                            total = 7,
                             icon = Icons.Rounded.Refresh,
                             title = "Rescan Device MediaStore Now",
                             subtitle = "Refresh local audio, video & exported files",
@@ -872,8 +896,8 @@ fun SettingsScreen(
                             testTag = "setting_rescan_media"
                         )
                         SettingsClickRow(
-                            index = 4,
-                            total = 6,
+                            index = 5,
+                            total = 7,
                             icon = Icons.Rounded.DeleteSweep,
                             title = "Clear Conversion History",
                             subtitle = "Remove completed job logs from Convert tab",
@@ -881,8 +905,8 @@ fun SettingsScreen(
                             testTag = "setting_clear_history"
                         )
                         SettingsClickRow(
-                            index = 5,
-                            total = 6,
+                            index = 6,
+                            total = 7,
                             icon = Icons.Rounded.RestartAlt,
                             title = "Reset All Settings",
                             subtitle = "Restore player, downloader & converter preferences to defaults",

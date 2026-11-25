@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeveloperBoard
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -59,11 +60,13 @@ fun SearchScreen(
     onSearchQueryChange: (String) -> Unit,
     onOpenDownloaderSheet: (String) -> Unit,
     onOpenCodecDiagnostics: () -> Unit = {},
+    onOpenDrawer: (() -> Unit)? = null,
     onPlayTrack: (MediaTrack, List<MediaTrack>) -> Unit,
     onPlayNext: (MediaTrack) -> Unit,
     onAddToPlaylist: (MediaTrack) -> Unit,
     onToggleLike: (MediaTrack) -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
+    onShowSongInfo: (MediaTrack) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isUrlInput = searchQuery.trim().startsWith("http://", ignoreCase = true) ||
@@ -90,12 +93,28 @@ fun SearchScreen(
                         .padding(horizontal = 14.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Search,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
+                    if (onOpenDrawer != null) {
+                        IconButton(
+                            onClick = onOpenDrawer,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("search_drawer_menu_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Menu,
+                                contentDescription = "Open navigation menu",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                    }
                     Box(
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.CenterStart
@@ -291,7 +310,8 @@ fun SearchScreen(
                             onPlayNext = { onPlayNext(track) },
                             onAddToPlaylist = { onAddToPlaylist(track) },
                             onToggleLike = { onToggleLike(track) },
-                            onConvertOrExtract = { onConvertOrExtract(track) }
+                            onConvertOrExtract = { onConvertOrExtract(track) },
+                            onSongInfo = { onShowSongInfo(track) }
                         )
                     }
                 }

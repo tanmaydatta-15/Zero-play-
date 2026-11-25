@@ -433,6 +433,7 @@ class PlaybackController(
     }
 
     fun updateCurrentTrackMetadata(updated: MediaTrack) {
+        artworkByteCache.remove(updated.id)
         _uiState.update { state ->
             val updatedQueue = state.queue.map { if (it.id == updated.id) updated else it }
             state.copy(
@@ -440,6 +441,22 @@ class PlaybackController(
                 queue = updatedQueue
             )
         }
+        val controller = mediaController ?: return
+        val idx = _uiState.value.queue.indexOfFirst { it.id == updated.id }
+        if (idx in 0 until controller.mediaItemCount) {
+            scope.launch {
+                val bytes = withContext(Dispatchers.IO) { loadArtworkBytes(updated) }
+                runCatching { controller.replaceMediaItem(idx, buildMediaItem(updated, bytes)) }
+            }
+        }
+    }
+
+    fun applyEqualizerState(state: EqualizerState) {
+        val controller = mediaController ?: return
+        controller.sendCustomCommand(
+            SessionCommand(EchoMediaSessionService.CMD_APPLY_AUDIO_EFFECTS, Bundle.EMPTY),
+            state.toBundle()
+        )
     }
 
     fun applyAudioEngineSettings(skipSilence: Boolean, pauseOnHeadsetDisconnect: Boolean) {

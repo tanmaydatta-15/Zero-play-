@@ -167,51 +167,151 @@ jobs:
           print(f"Building Zero Play {final_vname} (versionCode={final_vcode}, tag={tag})")
           PY
 
-      - name: Build Zero Play APK
+      - name: Install xdelta3 for Delta OTA Patching
+        run: sudo apt-get update && sudo apt-get install -y xdelta3
+
+      - name: Build Zero Play Per-ABI & Universal APKs
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Package OTA APK & version.json Manifest
+      - name: Generate Delta Patch & Package OTA Release Assets
         shell: bash
         env:
           META_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
           META_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
           META_TAG: ${{ steps.meta.outputs.tag }}
-          META_APK_FILENAME: ${{ steps.meta.outputs.apk_filename }}
           IS_PRERELEASE: ${{ inputs.prerelease == true }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p release_assets
-          APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
-          APK_DEST="release_assets/${META_APK_FILENAME}"
-          cp "$APK_SRC" "$APK_DEST"
+          mkdir -p release_assets tmp_prev
+
+          ARM64_SRC="app/build/outputs/apk/debug/app-arm64-v8a-debug.apk"
+          UNIV_SRC="app/build/outputs/apk/debug/app-universal-debug.apk"
+          if [ ! -f "$UNIV_SRC" ] && [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            UNIV_SRC="app/build/outputs/apk/debug/app-debug.apk"
+          fi
+          if [ ! -f "$ARM64_SRC" ]; then
+            ARM64_SRC="$UNIV_SRC"
+          fi
+
+          ARM64_NAME="ZeroPlay-${META_TAG}-arm64-v8a.apk"
+          UNIV_NAME="ZeroPlay-${META_TAG}-universal.apk"
+          cp "$ARM64_SRC" "release_assets/${ARM64_NAME}"
+          if [ -f "$UNIV_SRC" ]; then
+            cp "$UNIV_SRC" "release_assets/${UNIV_NAME}"
+          fi
 
           python3 - <<'PY'
-          import datetime, hashlib, json, os, pathlib
+          import datetime, hashlib, json, os, pathlib, subprocess, urllib.request
 
-          apk_path = pathlib.Path("release_assets") / os.environ["META_APK_FILENAME"]
-          sha256 = hashlib.sha256(apk_path.read_bytes()).hexdigest()
-          size_bytes = apk_path.stat().st_size
-          tag = os.environ["META_TAG"]
           repo = os.environ["GITHUB_REPOSITORY"]
-          sha_short = os.environ.get("GITHUB_SHA", "")[:7]
+          tag = os.environ["META_TAG"]
+          version_name = os.environ["META_VERSION_NAME"]
+          version_code = int(os.environ["META_VERSION_CODE"])
           prerelease = os.environ.get("IS_PRERELEASE", "false").lower() == "true"
+          sha_short = os.environ.get("GITHUB_SHA", "")[:7]
+          token = os.environ.get("GITHUB_TOKEN", "")
+
+          arm64_name = f"ZeroPlay-{tag}-arm64-v8a.apk"
+          univ_name = f"ZeroPlay-{tag}-universal.apk"
+          arm64_path = pathlib.Path("release_assets") / arm64_name
+          univ_path = pathlib.Path("release_assets") / univ_name
+          patch_name = "update-arm64.patch"
+          patch_path = pathlib.Path("release_assets") / patch_name
+
+          arm64_bytes = arm64_path.read_bytes()
+          arm64_sha256 = hashlib.sha256(arm64_bytes).hexdigest()
+          arm64_size = len(arm64_bytes)
+
+          base_version_code = 0
+          patch_url = ""
+          patch_size = 0
+
+          headers = {"Accept": "application/vnd.github+json", "User-Agent": "ZeroPlay-CI"}
+          if token:
+              headers["Authorization"] = f"Bearer {token}"
+
+          try:
+              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases?per_page=10", headers=headers)
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  releases = json.loads(resp.read().decode("utf-8"))
+              prev_arm64_url = None
+              prev_manifest_url = None
+              for rel in releases:
+                  if rel.get("draft"):
+                      continue
+                  if rel.get("tag_name") == tag:
+                      continue
+                  assets = rel.get("assets", [])
+                  for a in assets:
+                      aname = a.get("name", "").lower()
+                      if aname == "version.json":
+                          prev_manifest_url = a.get("browser_download_url")
+                      elif aname.endswith(".apk") and ("arm64" in aname or prev_arm64_url is None):
+                          prev_arm64_url = a.get("browser_download_url")
+                  if prev_arm64_url:
+                      break
+
+              if prev_manifest_url:
+                  mreq = urllib.request.Request(prev_manifest_url, headers=headers)
+                  with urllib.request.urlopen(mreq, timeout=20) as mresp:
+                      prev_manifest = json.loads(mresp.read().decode("utf-8"))
+                      base_version_code = int(prev_manifest.get("versionCode", 0))
+
+              if prev_arm64_url and base_version_code > 0:
+                  prev_apk_path = pathlib.Path("tmp_prev/previous-arm64.apk")
+                  dl_req = urllib.request.Request(prev_arm64_url, headers={"User-Agent": "ZeroPlay-CI"})
+                  with urllib.request.urlopen(dl_req, timeout=90) as dl_resp:
+                      prev_apk_path.write_bytes(dl_resp.read())
+
+                  # Generate standard RFC 3284 VCDIFF delta patch (-S none ensures pure-Kotlin on-device compatibility)
+                  cmd = [
+                      "xdelta3", "-e", "-S", "none", "-f",
+                      "-s", str(prev_apk_path),
+                      str(arm64_path),
+                      str(patch_path)
+                  ]
+                  subprocess.run(cmd, check=True)
+                  if patch_path.exists() and patch_path.stat().st_size > 0 and patch_path.stat().st_size < arm64_size:
+                      patch_size = patch_path.stat().st_size
+                      patch_url = f"https://github.com/{repo}/releases/download/{tag}/{patch_name}"
+                      print(f"Generated delta patch {patch_name}: {patch_size / (1024 * 1024):.2f} MB (from versionCode {base_version_code})")
+                  else:
+                      if patch_path.exists():
+                          patch_path.unlink()
+                      base_version_code = 0
+          except Exception as exc:
+              print(f"Skipping delta patch generation: {exc}")
+              if patch_path.exists():
+                  patch_path.unlink()
+              base_version_code = 0
+              patch_url = ""
+              patch_size = 0
+
+          full_arm64_url = f"https://github.com/{repo}/releases/download/{tag}/{arm64_name}"
+          univ_url = f"https://github.com/{repo}/releases/download/{tag}/{univ_name}" if univ_path.exists() else full_arm64_url
 
           manifest = {
-              "versionName": os.environ["META_VERSION_NAME"],
-              "versionCode": int(os.environ["META_VERSION_CODE"]),
+              "versionName": version_name,
+              "versionCode": version_code,
               "tagName": tag,
               "title": f"Zero Play {tag}",
-              "apkUrl": f"https://github.com/{repo}/releases/download/{tag}/{apk_path.name}",
-              "apkSizeBytes": size_bytes,
-              "sha256": sha256,
+              "baseVersionCode": base_version_code,
+              "patchUrl": patch_url,
+              "patchSize": patch_size,
+              "fullApkUrl": full_arm64_url,
+              "apkUrl": full_arm64_url,
+              "universalApkUrl": univ_url,
+              "apkSizeBytes": arm64_size,
+              "sha256": arm64_sha256,
               "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "prerelease": prerelease,
-              "notes": f"Automated Zero Play OTA build {tag} ({os.environ['META_VERSION_CODE']}) from commit {sha_short}."
+              "notes": f"Automated Zero Play OTA build {tag} (versionCode {version_code}) from commit {sha_short}."
           }
           pathlib.Path("release_assets/version.json").write_text(
               json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
           )
-          print(f"Packaged {apk_path.name} ({size_bytes / (1024 * 1024):.2f} MB)")
+          print(f"Packaged {arm64_name} ({arm64_size / (1024 * 1024):.2f} MB) + version.json")
           PY
 
       - name: Publish GitHub Release
@@ -221,12 +321,14 @@ jobs:
           name: Zero Play ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           body: |
-            Automated Zero Play OTA APK release for [`${{ github.repository }}`](https://github.com/${{ github.repository }}).
+            Automated Zero Play per-ABI & delta-patched OTA release for [`${{ github.repository }}`](https://github.com/${{ github.repository }}).
             - **Version:** `${{ steps.meta.outputs.version_name }}` (`versionCode: ${{ steps.meta.outputs.version_code }}`)
             - **Commit:** `${{ github.sha }}`
-            - **Engines:** NewPipeExtractor + yt-dlp-android + FFmpegKit full-gpl + Media3 AV1 (`dav1d`) + 8× Parallel Range Accelerator
+            - **OTA Delta:** Includes `arm64-v8a` split APK, universal fallback APK, and `xdelta3` binary delta patch (`update-arm64.patch`) when a prior release exists.
             - Install directly or update inside **Zero Play → Settings → Auto update**.
           prerelease: ${{ inputs.prerelease == true }}
           files: |
-            release_assets/${{ steps.meta.outputs.apk_filename }}
+            release_assets/*.apk
+            release_assets/*.patch
             release_assets/version.json
+          fail_on_unmatched_files: false

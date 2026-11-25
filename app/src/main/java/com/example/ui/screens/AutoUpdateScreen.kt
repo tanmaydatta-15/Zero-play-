@@ -84,6 +84,7 @@ fun AutoUpdateScreen(
     latestGitHubRelease: AppReleaseInfo? = null,
     isDownloadingUpdate: Boolean,
     updateDownloadProgress: Float,
+    updateDownloadStage: String? = null,
     downloadedApkPath: String?,
     needsInstallPermission: Boolean,
     onToggleAutoUpdate: (Boolean) -> Unit,
@@ -409,10 +410,15 @@ fun AutoUpdateScreen(
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
-                                    val sizeNote = if (release.apkSizeBytes > 0L) {
-                                        "APK size: ${formatBytes(release.apkSizeBytes)}"
-                                    } else {
-                                        "Ready to install"
+                                    val sizeNote = when {
+                                        release.isDeltaPatchApplicable && release.patchSizeBytes > 0L -> {
+                                            val fullSuffix = if (release.apkSizeBytes > release.patchSizeBytes) {
+                                                " (vs ${formatBytes(release.apkSizeBytes)} full)"
+                                            } else ""
+                                            "Delta patch: ${formatBytes(release.patchSizeBytes)}$fullSuffix"
+                                        }
+                                        release.apkSizeBytes > 0L -> "APK size: ${formatBytes(release.apkSizeBytes)}"
+                                        else -> "Ready to install"
                                     }
                                     Text(
                                         text = if (release.isPrerelease) "Preview • $sizeNote" else "Stable • $sizeNote",
@@ -435,8 +441,14 @@ fun AutoUpdateScreen(
                                         progress = { updateDownloadProgress },
                                         modifier = Modifier.fillMaxWidth()
                                     )
+                                    val stageText = updateDownloadStage?.takeIf { it.isNotBlank() }
+                                        ?: if (release.isDeltaPatchApplicable) {
+                                            "Downloading delta patch..."
+                                        } else {
+                                            "Downloading update package..."
+                                        }
                                     Text(
-                                        text = "Downloading update package... ${(updateDownloadProgress * 100).toInt()}%",
+                                        text = "$stageText ${(updateDownloadProgress * 100).toInt()}%",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -477,7 +489,13 @@ fun AutoUpdateScreen(
                                             Text("Install Update")
                                         }
                                     }
-                                    !release.apkDownloadUrl.isNullOrBlank() -> {
+                                    !release.apkDownloadUrl.isNullOrBlank() || !release.patchDownloadUrl.isNullOrBlank() -> {
+                                        val ctaLabel = when {
+                                            isDownloadingUpdate -> "Updating..."
+                                            release.isDeltaPatchApplicable && release.patchSizeBytes > 0L ->
+                                                "Update (${formatBytes(release.patchSizeBytes)})"
+                                            else -> "Download & Update"
+                                        }
                                         Button(
                                             onClick = onDownloadAndInstall,
                                             enabled = !isDownloadingUpdate,
@@ -486,7 +504,7 @@ fun AutoUpdateScreen(
                                         ) {
                                             Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text(if (isDownloadingUpdate) "Downloading..." else "Download & Update")
+                                            Text(ctaLabel)
                                         }
                                     }
                                 }

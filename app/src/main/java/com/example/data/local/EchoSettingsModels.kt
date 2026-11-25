@@ -210,11 +210,32 @@ data class EchoSettings(
     // Storage & Library
     val skipSmallCompressionSavings: Boolean = true,
     val autoScanOnLaunch: Boolean = true,
+    val autoDownloadArtistImages: Boolean = true,
     val cacheLimit: CacheLimitPref = CacheLimitPref.GB_1,
+
+    // 10-Band Equalizer & Audio Effects
+    val eqEnabled: Boolean = false,
+    val eqPreset: com.example.playback.EqualizerPreset = com.example.playback.EqualizerPreset.FLAT,
+    val eqBandLevelsDb: List<Float> = com.example.playback.EqualizerPreset.FLAT.bandLevelsDb,
+    val eqBassBoostEnabled: Boolean = false,
+    val eqBassBoostStrength: Int = 0,
+    val eqVirtualizerEnabled: Boolean = false,
+    val eqVirtualizerStrength: Int = 0,
 
     // Auto Update (GitHub Releases / Direct Feed)
     val autoUpdateEnabled: Boolean = true,
     val updateChannel: UpdateChannelPref = UpdateChannelPref.STABLE,
     val updateRepoSlug: String = "tanmaydatta-15/Zero-play-",
     val directUpdateFeedUrl: String = ""
-)
+) {
+    fun toEqualizerState(): com.example.playback.EqualizerState =
+        com.example.playback.EqualizerState(
+            enabled = eqEnabled,
+            preset = eqPreset,
+            bandLevelsDb = eqBandLevelsDb,
+            bassBoostEnabled = eqBassBoostEnabled,
+            bassBoostStrength = eqBassBoostStrength,
+            virtualizerEnabled = eqVirtualizerEnabled,
+            virtualizerStrength = eqVirtualizerStrength
+        )
+}

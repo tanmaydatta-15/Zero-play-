@@ -91,7 +91,17 @@ class PreferencesManager(private val context: Context) {
         // Storage & Library
         val SKIP_SMALL_SAVINGS = booleanPreferencesKey("skip_small_savings")
         val AUTO_SCAN_LAUNCH = booleanPreferencesKey("auto_scan_launch")
+        val AUTO_DOWNLOAD_ARTIST_IMAGES = booleanPreferencesKey("auto_download_artist_images")
         val CACHE_LIMIT = stringPreferencesKey("cache_limit")
+
+        // 10-Band Equalizer & Audio Effects
+        val EQ_ENABLED = booleanPreferencesKey("eq_enabled")
+        val EQ_PRESET = stringPreferencesKey("eq_preset")
+        val EQ_BAND_LEVELS = stringPreferencesKey("eq_band_levels")
+        val EQ_BASS_ENABLED = booleanPreferencesKey("eq_bass_enabled")
+        val EQ_BASS_STRENGTH = intPreferencesKey("eq_bass_strength")
+        val EQ_VIRT_ENABLED = booleanPreferencesKey("eq_virt_enabled")
+        val EQ_VIRT_STRENGTH = intPreferencesKey("eq_virt_strength")
 
         // Auto Update & Seal Sheet Prefs
         val AUTO_UPDATE_ENABLED = booleanPreferencesKey("auto_update_enabled")
@@ -177,7 +187,16 @@ class PreferencesManager(private val context: Context) {
 
             skipSmallCompressionSavings = prefs[Keys.SKIP_SMALL_SAVINGS] ?: true,
             autoScanOnLaunch = prefs[Keys.AUTO_SCAN_LAUNCH] ?: true,
+            autoDownloadArtistImages = prefs[Keys.AUTO_DOWNLOAD_ARTIST_IMAGES] ?: true,
             cacheLimit = parseEnum(prefs[Keys.CACHE_LIMIT], CacheLimitPref.GB_1),
+
+            eqEnabled = prefs[Keys.EQ_ENABLED] ?: false,
+            eqPreset = parseEnum(prefs[Keys.EQ_PRESET], com.example.playback.EqualizerPreset.FLAT),
+            eqBandLevelsDb = com.example.playback.EqualizerSpec.decodeBandLevels(prefs[Keys.EQ_BAND_LEVELS]),
+            eqBassBoostEnabled = prefs[Keys.EQ_BASS_ENABLED] ?: false,
+            eqBassBoostStrength = (prefs[Keys.EQ_BASS_STRENGTH] ?: 0).coerceIn(0, 1000),
+            eqVirtualizerEnabled = prefs[Keys.EQ_VIRT_ENABLED] ?: false,
+            eqVirtualizerStrength = (prefs[Keys.EQ_VIRT_STRENGTH] ?: 0).coerceIn(0, 1000),
 
             autoUpdateEnabled = prefs[Keys.AUTO_UPDATE_ENABLED] ?: true,
             updateChannel = parseEnum(prefs[Keys.UPDATE_CHANNEL], UpdateChannelPref.STABLE),
@@ -253,7 +272,19 @@ class PreferencesManager(private val context: Context) {
     // Storage & Library
     suspend fun setSkipSmallSavings(v: Boolean) = edit { it[Keys.SKIP_SMALL_SAVINGS] = v }
     suspend fun setAutoScanOnLaunch(v: Boolean) = edit { it[Keys.AUTO_SCAN_LAUNCH] = v }
+    suspend fun setAutoDownloadArtistImages(v: Boolean) = edit { it[Keys.AUTO_DOWNLOAD_ARTIST_IMAGES] = v }
     suspend fun setCacheLimit(v: CacheLimitPref) = edit { it[Keys.CACHE_LIMIT] = v.name }
+
+    // 10-Band Equalizer & Audio Effects
+    suspend fun saveEqualizerState(state: com.example.playback.EqualizerState) = edit { prefs ->
+        prefs[Keys.EQ_ENABLED] = state.enabled
+        prefs[Keys.EQ_PRESET] = state.preset.name
+        prefs[Keys.EQ_BAND_LEVELS] = com.example.playback.EqualizerSpec.encodeBandLevels(state.bandLevelsDb)
+        prefs[Keys.EQ_BASS_ENABLED] = state.bassBoostEnabled
+        prefs[Keys.EQ_BASS_STRENGTH] = state.bassBoostStrength.coerceIn(0, 1000)
+        prefs[Keys.EQ_VIRT_ENABLED] = state.virtualizerEnabled
+        prefs[Keys.EQ_VIRT_STRENGTH] = state.virtualizerStrength.coerceIn(0, 1000)
+    }
 
     // Auto Update & Downloader Sheet Prefs
     suspend fun setAutoUpdateEnabled(v: Boolean) = edit { it[Keys.AUTO_UPDATE_ENABLED] = v }

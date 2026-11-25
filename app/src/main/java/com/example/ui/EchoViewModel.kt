@@ -42,9 +42,15 @@ import com.example.data.model.MediaType
 import com.example.data.model.Mp3BitrateOption
 import com.example.data.model.PlaylistUi
 import com.example.data.model.VideoContainerOption
+import com.example.data.repository.ArtistArtworkManager
 import com.example.data.repository.EchoRepository
 import com.example.data.repository.MediaCatalogSeed
 import com.example.downloader.MediaDownloadManager
+import com.example.metadata.EditableAudioTags
+import com.example.metadata.SongDetailedMetadata
+import com.example.playback.EqualizerPreset
+import com.example.playback.EqualizerSpec
+import com.example.playback.EqualizerState
 import com.example.playback.PlaybackController
 import com.example.playback.PlaybackUiState
 import com.example.updater.AppReleaseInfo
@@ -83,6 +89,12 @@ data class EchoAppUiState(
     val showSettingsScreen: Boolean = false,
     val showAboutScreen: Boolean = false,
     val showAutoUpdateScreen: Boolean = false,
+    val showEqualizerScreen: Boolean = false,
+    val showFoldersScreen: Boolean = false,
+    val showListeningStatsScreen: Boolean = false,
+    val songInfoTrack: MediaTrack? = null,
+    val tagEditorTrack: MediaTrack? = null,
+    val tagEditorInitialMetadata: SongDetailedMetadata? = null,
     val showDeviceInfoDialog: Boolean = false,
     val isCheckingUpdates: Boolean = false,
     val updateCheckResultMessage: String? = null,
@@ -91,6 +103,7 @@ data class EchoAppUiState(
     val dismissedOtaBanner: Boolean = false,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Float = 0f,
+    val updateDownloadStage: String? = null,
     val downloadedApkPath: String? = null,
     val needsInstallPermission: Boolean = false,
     val downloadSheetUrl: String? = null,
@@ -112,6 +125,7 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = EchoDatabase.getInstance(application)
     private val repository = EchoRepository(application, db.echoDao())
+    private val artistArtworkManager = ArtistArtworkManager(application, db.echoDao())
     private val preferences = PreferencesManager(application)
     private val downloadManager = MediaDownloadManager(application, repository)
     private val converterEngine = MediaConverterEngine(application, repository)
@@ -126,6 +140,9 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
 
     val allTracks: StateFlow<List<MediaTrack>> = repository.allTracks
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val artistArtworks: StateFlow<Map<String, String>> = artistArtworkManager.artistArtworks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val playlists: StateFlow<List<PlaylistUi>> = repository.playlists
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -169,6 +186,7 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
                 skipSilence = initialSettings.skipSilence,
                 pauseOnHeadsetDisconnect = initialSettings.pauseOnHeadsetDisconnect
             )
+            playbackController.applyEqualizerState(initialSettings.toEqualizerState())
             if (initialSettings.autoUpdateEnabled &&
                 (initialSettings.updateRepoSlug.isNotBlank() || initialSettings.directUpdateFeedUrl.isNotBlank())
             ) {
@@ -292,6 +310,64 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(showAboutScreen = show, activeTopSheet = null) }
     }
 
+    fun openEqualizer(show: Boolean) {
+        _uiState.update { it.copy(showEqualizerScreen = show, activeTopSheet = null) }
+    }
+
+    fun openFolders(show: Boolean) {
+        _uiState.update { it.copy(showFoldersScreen = show, activeTopSheet = null) }
+    }
+
+    fun openListeningStats(show: Boolean) {
+        _uiState.update { it.copy(showListeningStatsScreen = show, activeTopSheet = null) }
+    }
+
+    fun openSongInfo(track: MediaTrack) {
+        _uiState.update { it.copy(songInfoTrack = track) }
+    }
+
+    fun dismissSongInfo() {
+        _uiState.update { it.copy(songInfoTrack = null) }
+    }
+
+    fun openTagEditor(track: MediaTrack, initialMetadata: SongDetailedMetadata? = null) {
+        _uiState.update {
+            it.copy(
+                songInfoTrack = null,
+                tagEditorTrack = track,
+                tagEditorInitialMetadata = initialMetadata
+            )
+        }
+    }
+
+    fun dismissTagEditor() {
+        _uiState.update { it.copy(tagEditorTrack = null, tagEditorInitialMetadata = null) }
+    }
+
+    fun onTagEditorSaved(
+        track: MediaTrack,
+        tags: EditableAudioTags,
+        updatedArtworkUri: String?,
+        writtenToFile: Boolean
+    ) {
+        viewModelScope.launch {
+            val updated = repository.updateTrackMetadata(track.id, tags, updatedArtworkUri)
+            if (updated != null) {
+                playbackController.updateCurrentTrackMetadata(updated)
+            }
+            _uiState.update {
+                it.copy(
+                    tagEditorTrack = null,
+                    tagEditorInitialMetadata = null
+                )
+            }
+            showStatus(
+                if (writtenToFile) "Tags & artwork saved to audio file"
+                else "Tags saved to Zero Play library"
+            )
+        }
+    }
+
     fun openDeviceInfo(show: Boolean) {
         _uiState.update { it.copy(showDeviceInfoDialog = show) }
     }
@@ -392,10 +468,9 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun downloadAndInstallUpdate(overrideRelease: AppReleaseInfo? = null) {
         val release = overrideRelease ?: _uiState.value.availableRelease ?: _uiState.value.latestGitHubRelease ?: return
-        val apkUrl = release.apkDownloadUrl
-        if (apkUrl.isNullOrBlank()) {
+        if (release.apkDownloadUrl.isNullOrBlank() && release.patchDownloadUrl.isNullOrBlank()) {
             _uiState.update {
-                it.copy(updateCheckResultMessage = "This release does not contain an .apk asset yet. Use Release button to open GitHub.")
+                it.copy(updateCheckResultMessage = "This release does not contain an .apk or .patch asset yet. Use Release button to open GitHub.")
             }
             return
         }
@@ -407,18 +482,22 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
                     availableRelease = release,
                     isDownloadingUpdate = true,
                     updateDownloadProgress = 0.02f,
+                    updateDownloadStage = "Preparing update...",
                     downloadedApkPath = null,
                     needsInstallPermission = false
                 )
             }
-            val result = updateManager.downloadApk(apkUrl, release.resolvedVersionLabel) { p ->
-                _uiState.update { it.copy(updateDownloadProgress = p) }
-            }
+            val result = updateManager.downloadAndPrepareUpdate(
+                release = release,
+                onProgress = { p -> _uiState.update { it.copy(updateDownloadProgress = p) } },
+                onStage = { stage -> _uiState.update { it.copy(updateDownloadStage = stage) } }
+            )
             result.onSuccess { apkFile ->
                 _uiState.update {
                     it.copy(
                         isDownloadingUpdate = false,
                         updateDownloadProgress = 1f,
+                        updateDownloadStage = null,
                         downloadedApkPath = apkFile.absolutePath
                     )
                 }
@@ -427,7 +506,8 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isDownloadingUpdate = false,
-                        updateCheckResultMessage = "Download failed: ${err.message}"
+                        updateDownloadStage = null,
+                        updateCheckResultMessage = "Update failed: ${err.message}"
                     )
                 }
             }
@@ -752,13 +832,108 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { preferences.setKeepOriginalPhoto(v) }
     }
 
-    // --- Storage & Reset ---
+    // --- Storage, Artist Artworks & Equalizer ---
     fun setSkipSmallSavings(v: Boolean) {
         viewModelScope.launch { preferences.setSkipSmallSavings(v) }
     }
 
     fun setAutoScanOnLaunch(v: Boolean) {
         viewModelScope.launch { preferences.setAutoScanOnLaunch(v) }
+    }
+
+    fun setAutoDownloadArtistImages(v: Boolean) {
+        viewModelScope.launch {
+            preferences.setAutoDownloadArtistImages(v)
+            if (v) {
+                val names = allTracks.value.map { it.artist }.distinct()
+                artistArtworkManager.prefetchMissingArtistImages(names, autoDownloadEnabled = true)
+            }
+        }
+    }
+
+    fun prefetchArtistImages(artistNames: List<String>) {
+        viewModelScope.launch {
+            artistArtworkManager.prefetchMissingArtistImages(
+                artistNames = artistNames,
+                autoDownloadEnabled = settings.value.autoDownloadArtistImages
+            )
+        }
+    }
+
+    fun saveManualArtistImage(artistName: String, imageUri: Uri) {
+        viewModelScope.launch {
+            val result = artistArtworkManager.saveManualArtistImage(artistName, imageUri)
+            result.onSuccess {
+                showStatus("Updated portrait for $artistName")
+            }.onFailure { err ->
+                showStatus("Could not save artist image: ${err.message}")
+            }
+        }
+    }
+
+    private fun updateEqualizerState(transform: (EqualizerState) -> EqualizerState) {
+        val next = transform(settings.value.toEqualizerState())
+        playbackController.applyEqualizerState(next)
+        viewModelScope.launch { preferences.saveEqualizerState(next) }
+    }
+
+    fun setEqEnabled(enabled: Boolean) {
+        updateEqualizerState { it.copy(enabled = enabled) }
+    }
+
+    fun selectEqPreset(preset: EqualizerPreset) {
+        updateEqualizerState { current ->
+            if (preset == EqualizerPreset.CUSTOM) {
+                current.copy(preset = EqualizerPreset.CUSTOM)
+            } else {
+                current.copy(
+                    preset = preset,
+                    bandLevelsDb = preset.bandLevelsDb
+                )
+            }
+        }
+    }
+
+    fun setEqBandDb(bandIndex: Int, db: Float) {
+        if (bandIndex !in 0 until EqualizerSpec.BAND_COUNT) return
+        updateEqualizerState { current ->
+            val updated = current.bandLevelsDb.toMutableList()
+            while (updated.size < EqualizerSpec.BAND_COUNT) updated.add(0f)
+            updated[bandIndex] = db.coerceIn(EqualizerSpec.MIN_DB, EqualizerSpec.MAX_DB)
+            current.copy(
+                preset = EqualizerPreset.CUSTOM,
+                bandLevelsDb = updated
+            )
+        }
+    }
+
+    fun setEqBassBoostEnabled(enabled: Boolean) {
+        updateEqualizerState { it.copy(bassBoostEnabled = enabled) }
+    }
+
+    fun setEqBassBoostStrength(strength: Int) {
+        updateEqualizerState { it.copy(bassBoostStrength = strength.coerceIn(0, 1000)) }
+    }
+
+    fun setEqVirtualizerEnabled(enabled: Boolean) {
+        updateEqualizerState { it.copy(virtualizerEnabled = enabled) }
+    }
+
+    fun setEqVirtualizerStrength(strength: Int) {
+        updateEqualizerState { it.copy(virtualizerStrength = strength.coerceIn(0, 1000)) }
+    }
+
+    fun resetEqualizerFlat() {
+        updateEqualizerState { current ->
+            current.copy(
+                preset = EqualizerPreset.FLAT,
+                bandLevelsDb = EqualizerPreset.FLAT.bandLevelsDb,
+                bassBoostEnabled = false,
+                bassBoostStrength = 0,
+                virtualizerEnabled = false,
+                virtualizerStrength = 0
+            )
+        }
     }
 
     fun cycleCacheLimit() {
@@ -778,6 +953,7 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
             preferences.resetAllSettings()
             playbackController.setPlaybackSpeed(1.0f)
             playbackController.applyAudioEngineSettings(skipSilence = false, pauseOnHeadsetDisconnect = true)
+            playbackController.applyEqualizerState(EqualizerState())
             showStatus("All settings restored to defaults")
         }
     }
@@ -792,6 +968,7 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
         playbackController.playTrack(track, activeQueue)
         playbackController.setPlaybackSpeed(s.defaultSpeed)
         playbackController.applyAudioEngineSettings(s.skipSilence, s.pauseOnHeadsetDisconnect)
+        playbackController.applyEqualizerState(s.toEqualizerState())
         if (track.mediaType == MediaType.VIDEO) {
             _uiState.update { it.copy(isPlayerExpanded = true) }
         } else {

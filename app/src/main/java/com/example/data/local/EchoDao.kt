@@ -30,6 +30,56 @@ interface EchoDao {
     @Query("UPDATE track_records SET source = :source, uriString = :uriString WHERE trackId = :trackId")
     suspend fun updateTrackSource(trackId: String, source: String, uriString: String)
 
+    @Query(
+        """
+        UPDATE track_records SET
+            title = :title,
+            album = :album,
+            artist = :artist,
+            albumArtist = :albumArtist,
+            composer = :composer,
+            genre = :genre,
+            lyricist = :lyricist,
+            trackNumber = :trackNumber,
+            discNumber = :discNumber,
+            year = :year,
+            comment = :comment,
+            embeddedLyrics = :embeddedLyrics,
+            artworkUriString = :artworkUriString,
+            dateModified = :dateModified
+        WHERE trackId = :trackId
+        """
+    )
+    suspend fun updateTrackMetadata(
+        trackId: String,
+        title: String,
+        album: String,
+        artist: String,
+        albumArtist: String,
+        composer: String,
+        genre: String,
+        lyricist: String,
+        trackNumber: String,
+        discNumber: String,
+        year: String,
+        comment: String,
+        embeddedLyrics: String,
+        artworkUriString: String?,
+        dateModified: Long
+    )
+
+    @Query("SELECT * FROM artist_artwork")
+    fun observeArtistArtworks(): Flow<List<ArtistArtworkEntity>>
+
+    @Query("SELECT * FROM artist_artwork WHERE artistKey = :artistKey LIMIT 1")
+    suspend fun getArtistArtwork(artistKey: String): ArtistArtworkEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArtistArtwork(entity: ArtistArtworkEntity)
+
+    @Query("DELETE FROM artist_artwork WHERE artistKey = :artistKey")
+    suspend fun deleteArtistArtwork(artistKey: String)
+
     @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
     fun observePlaylists(): Flow<List<PlaylistEntity>>
 

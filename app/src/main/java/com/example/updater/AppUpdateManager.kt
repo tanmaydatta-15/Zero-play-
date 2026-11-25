@@ -1,11 +1,14 @@
 package com.example.updater
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
 import com.example.BuildConfig
@@ -22,6 +25,7 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -44,7 +48,13 @@ data class AppReleaseInfo(
     val isUpdateAvailable: Boolean,
     val assetId: Long = 0L,
     val publishedAtMs: Long = 0L,
-    val resolvedVersionLabel: String = tagName
+    val resolvedVersionLabel: String = tagName,
+    val baseVersionCode: Long = 0L,
+    val patchDownloadUrl: String? = null,
+    val patchSizeBytes: Long = 0L,
+    val fullApkUrl: String? = apkDownloadUrl,
+    val expectedSha256: String? = null,
+    val isDeltaPatchApplicable: Boolean = false
 )
 
 sealed class UpdateCheckOutcome {
@@ -68,6 +78,7 @@ sealed class UpdateCheckOutcome {
 class AppUpdateManager(private val context: Context) {
 
     companion object {
+        private const val TAG = "ZeroPlayUpdater"
         private const val PREFS_NAME = "zero_play_ota_prefs"
         private const val KEY_LAST_INSTALLED_ASSET_ID = "last_installed_asset_id"
         private const val KEY_LAST_INSTALLED_PUBLISHED_MS = "last_installed_published_ms"
@@ -78,6 +89,21 @@ class AppUpdateManager(private val context: Context) {
 
         private val VERSION_PATTERN = Regex("""(?i)(?:v\.?\s*|version\s*)?(\d+(?:\.\d+)+)""")
         private val SINGLE_NUM_PATTERN = Regex("""(?i)(?:v\.?\s*|zero\s*|r|build\s*)(\d+)\b""")
+
+        /**
+         * Determines whether a binary VCDIFF delta patch can be applied against the installed APK.
+         * Requires matching baseVersionCode, a non-blank patch URL, and an arm64-v8a device ABI.
+         */
+        internal fun shouldUseDeltaPatch(
+            baseVersionCode: Long,
+            installedVersionCode: Long,
+            patchUrl: String?,
+            supportedAbis: List<String>
+        ): Boolean {
+            if (baseVersionCode <= 0L || baseVersionCode != installedVersionCode) return false
+            if (patchUrl.isNullOrBlank()) return false
+            return supportedAbis.any { it.equals("arm64-v8a", ignoreCase = true) }
+        }
 
         /**
          * Extracts the highest semantic version list found across any release fields
@@ -375,7 +401,16 @@ class AppUpdateManager(private val context: Context) {
             val json = JSONObject(body)
             val remoteName = json.optString("versionName", json.optString("tag_name", "1.0"))
             val remoteCode = json.optLong("versionCode", 0L)
-            val apkUrl = json.optString("apkUrl", json.optString("downloadUrl", "")).takeIf { it.isNotBlank() }
+            val supportsArm64 = Build.SUPPORTED_ABIS.any { it.equals("arm64-v8a", ignoreCase = true) }
+            val fullApk = json.optString("fullApkUrl", "").takeIf { it.isNotBlank() }
+                ?: json.optString("apkUrl", "").takeIf { it.isNotBlank() }
+                ?: json.optString("downloadUrl", "").takeIf { it.isNotBlank() }
+            val universalApk = json.optString("universalApkUrl", "").takeIf { it.isNotBlank() }
+            val apkUrl = if (supportsArm64) (fullApk ?: universalApk) else (universalApk ?: fullApk)
+            val baseVersionCode = json.optLong("baseVersionCode", 0L)
+            val patchUrl = json.optString("patchUrl", "").takeIf { it.isNotBlank() }
+            val patchSize = json.optLong("patchSize", 0L)
+            val expectedSha256 = json.optString("sha256", "").takeIf { it.isNotBlank() }
             val notes = json.optString("notes", json.optString("body", "New version available."))
             val pageUrl = json.optString("releaseUrl", url)
             val publishedMs = parseIso8601UtcMillis(json.optString("publishedAt", ""))
@@ -393,6 +428,13 @@ class AppUpdateManager(private val context: Context) {
                 lastInstalledAssetId = lastAssetId
             )
 
+            val useDelta = shouldUseDeltaPatch(
+                baseVersionCode = baseVersionCode,
+                installedVersionCode = meta.versionCode,
+                patchUrl = patchUrl,
+                supportedAbis = Build.SUPPORTED_ABIS.toList()
+            )
+
             val label = if (remoteName.startsWith("v", ignoreCase = true)) remoteName else "v$remoteName"
             val info = AppReleaseInfo(
                 tagName = label,
@@ -405,7 +447,13 @@ class AppUpdateManager(private val context: Context) {
                 isUpdateAvailable = newer,
                 assetId = publishedMs,
                 publishedAtMs = publishedMs,
-                resolvedVersionLabel = label
+                resolvedVersionLabel = label,
+                baseVersionCode = baseVersionCode,
+                patchDownloadUrl = patchUrl,
+                patchSizeBytes = patchSize,
+                fullApkUrl = apkUrl,
+                expectedSha256 = expectedSha256,
+                isDeltaPatchApplicable = useDelta
             )
             if (newer) {
                 UpdateCheckOutcome.UpdateAvailable(installedLabel, info)
@@ -434,12 +482,28 @@ class AppUpdateManager(private val context: Context) {
         val htmlUrl = json.optString("html_url", "")
         val releasePublishedMs = parseIso8601UtcMillis(json.optString("published_at", ""))
         val assets = json.optJSONArray("assets")
+        val supportsArm64 = Build.SUPPORTED_ABIS.any { it.equals("arm64-v8a", ignoreCase = true) }
 
-        var apkUrl: String? = null
-        var apkFileName: String? = null
-        var apkSize = 0L
-        var apkAssetId = 0L
-        var apkUpdatedMs = 0L
+        var arm64ApkUrl: String? = null
+        var arm64ApkName: String? = null
+        var arm64ApkSize = 0L
+        var arm64AssetId = 0L
+        var arm64UpdatedMs = 0L
+
+        var universalApkUrl: String? = null
+        var universalApkName: String? = null
+        var universalApkSize = 0L
+        var universalAssetId = 0L
+        var universalUpdatedMs = 0L
+
+        var fallbackApkUrl: String? = null
+        var fallbackApkName: String? = null
+        var fallbackApkSize = 0L
+        var fallbackAssetId = 0L
+        var fallbackUpdatedMs = 0L
+
+        var assetPatchUrl: String? = null
+        var assetPatchSize = 0L
         var versionJsonUrl: String? = null
 
         if (assets != null) {
@@ -447,27 +511,85 @@ class AppUpdateManager(private val context: Context) {
                 val asset = assets.getJSONObject(i)
                 val assetName = asset.optString("name", "")
                 val lower = assetName.lowercase()
-                if (lower == "version.json" || lower == "ota.json") {
-                    versionJsonUrl = asset.optString("browser_download_url", "").takeIf { it.isNotBlank() }
-                } else if (lower.endsWith(".apk")) {
-                    val url = asset.optString("browser_download_url", "")
-                    val size = asset.optLong("size", 0L)
-                    val id = asset.optLong("id", 0L)
-                    val updated = parseIso8601UtcMillis(asset.optString("updated_at", ""))
-                    if (apkUrl == null || lower.contains("release") || lower.contains("zero")) {
-                        apkUrl = url
-                        apkFileName = assetName
-                        apkSize = size
-                        apkAssetId = id
-                        apkUpdatedMs = updated
+                val url = asset.optString("browser_download_url", "").takeIf { it.isNotBlank() }
+                val size = asset.optLong("size", 0L)
+                val id = asset.optLong("id", 0L)
+                val updated = parseIso8601UtcMillis(asset.optString("updated_at", ""))
+
+                when {
+                    lower == "version.json" || lower == "ota.json" -> {
+                        versionJsonUrl = url
+                    }
+                    lower.endsWith(".patch") && (lower.contains("arm64") || assetPatchUrl == null) -> {
+                        assetPatchUrl = url
+                        assetPatchSize = size
+                    }
+                    lower.endsWith(".apk") && url != null -> {
+                        when {
+                            lower.contains("arm64") -> {
+                                arm64ApkUrl = url
+                                arm64ApkName = assetName
+                                arm64ApkSize = size
+                                arm64AssetId = id
+                                arm64UpdatedMs = updated
+                            }
+                            lower.contains("universal") -> {
+                                universalApkUrl = url
+                                universalApkName = assetName
+                                universalApkSize = size
+                                universalAssetId = id
+                                universalUpdatedMs = updated
+                            }
+                            fallbackApkUrl == null || lower.contains("release") || lower.contains("zero") -> {
+                                fallbackApkUrl = url
+                                fallbackApkName = assetName
+                                fallbackApkSize = size
+                                fallbackAssetId = id
+                                fallbackUpdatedMs = updated
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Optional version.json manifest attached by CI gives exact versionName + versionCode
+        // Choose best per-ABI APK for this device
+        var apkUrl: String?
+        var apkFileName: String?
+        var apkSize: Long
+        var apkAssetId: Long
+        var apkUpdatedMs: Long
+
+        if (supportsArm64 && arm64ApkUrl != null) {
+            apkUrl = arm64ApkUrl
+            apkFileName = arm64ApkName
+            apkSize = arm64ApkSize
+            apkAssetId = arm64AssetId
+            apkUpdatedMs = arm64UpdatedMs
+        } else if (universalApkUrl != null) {
+            apkUrl = universalApkUrl
+            apkFileName = universalApkName
+            apkSize = universalApkSize
+            apkAssetId = universalAssetId
+            apkUpdatedMs = universalUpdatedMs
+        } else {
+            apkUrl = fallbackApkUrl ?: arm64ApkUrl
+            apkFileName = fallbackApkName ?: arm64ApkName
+            apkSize = if (fallbackApkUrl != null) fallbackApkSize else arm64ApkSize
+            apkAssetId = if (fallbackApkUrl != null) fallbackAssetId else arm64AssetId
+            apkUpdatedMs = if (fallbackApkUrl != null) fallbackUpdatedMs else arm64UpdatedMs
+        }
+
+        // Optional version.json manifest attached by CI gives exact versionName, versionCode, delta patch URL & SHA-256
         var manifestVersionName: String? = null
         var manifestVersionCode = 0L
+        var baseVersionCode = 0L
+        var manifestPatchUrl: String? = null
+        var manifestPatchSize = 0L
+        var manifestFullApkUrl: String? = null
+        var manifestUniversalApkUrl: String? = null
+        var manifestSha256: String? = null
+
         if (!versionJsonUrl.isNullOrBlank()) {
             runCatching {
                 val (mCode, mBody) = httpGetString(versionJsonUrl)
@@ -475,14 +597,40 @@ class AppUpdateManager(private val context: Context) {
                     val mJson = JSONObject(mBody)
                     manifestVersionName = mJson.optString("versionName", "").takeIf { it.isNotBlank() }
                     manifestVersionCode = mJson.optLong("versionCode", 0L)
+                    baseVersionCode = mJson.optLong("baseVersionCode", 0L)
+                    manifestPatchUrl = mJson.optString("patchUrl", "").takeIf { it.isNotBlank() }
+                    manifestPatchSize = mJson.optLong("patchSize", 0L)
+                    manifestFullApkUrl = mJson.optString("fullApkUrl", "").takeIf { it.isNotBlank() }
+                        ?: mJson.optString("apkUrl", "").takeIf { it.isNotBlank() }
+                    manifestUniversalApkUrl = mJson.optString("universalApkUrl", "").takeIf { it.isNotBlank() }
+                    manifestSha256 = mJson.optString("sha256", "").takeIf { it.isNotBlank() }
                 }
             }
         }
 
+        val resolvedFullApkUrl = if (supportsArm64) {
+            manifestFullApkUrl ?: apkUrl ?: manifestUniversalApkUrl
+        } else {
+            manifestUniversalApkUrl ?: apkUrl ?: manifestFullApkUrl
+        }
+        if (apkUrl == null) {
+            apkUrl = resolvedFullApkUrl
+        }
+
+        val resolvedPatchUrl = manifestPatchUrl ?: assetPatchUrl
+        val resolvedPatchSize = if (manifestPatchSize > 0L) manifestPatchSize else assetPatchSize
+        val useDelta = shouldUseDeltaPatch(
+            baseVersionCode = baseVersionCode,
+            installedVersionCode = meta.versionCode,
+            patchUrl = resolvedPatchUrl,
+            supportedAbis = Build.SUPPORTED_ABIS.toList()
+        )
+
         val effectivePublishedMs = maxOf(releasePublishedMs, apkUpdatedMs)
         val bestSegs = extractBestVersionSegments(manifestVersionName, name, tagName, apkFileName)
+        val mName = manifestVersionName
         val resolvedLabel = when {
-            !manifestVersionName.isNullOrBlank() -> "v${manifestVersionName!!.removePrefix("v")}"
+            !mName.isNullOrBlank() -> "v${mName.removePrefix("v")}"
             bestSegs.size >= 2 -> "v${bestSegs.joinToString(".")}"
             else -> tagName
         }
@@ -505,15 +653,121 @@ class AppUpdateManager(private val context: Context) {
             tagName = tagName,
             title = name,
             releaseNotes = body,
-            apkDownloadUrl = apkUrl,
+            apkDownloadUrl = resolvedFullApkUrl,
             apkSizeBytes = apkSize,
             releasePageUrl = htmlUrl,
             isPrerelease = prerelease,
             isUpdateAvailable = isNewer,
             assetId = apkAssetId,
             publishedAtMs = effectivePublishedMs,
-            resolvedVersionLabel = resolvedLabel
+            resolvedVersionLabel = resolvedLabel,
+            baseVersionCode = baseVersionCode,
+            patchDownloadUrl = resolvedPatchUrl,
+            patchSizeBytes = resolvedPatchSize,
+            fullApkUrl = resolvedFullApkUrl,
+            expectedSha256 = manifestSha256,
+            isDeltaPatchApplicable = useDelta
         )
+    }
+
+    /**
+     * Play Store-style OTA download & reconstruction pipeline:
+     * 1. When baseVersionCode matches the installed APK on arm64-v8a, downloads only the small
+     *    VCDIFF binary delta patch (~1-3 MB), reconstructs the new signed APK inside cacheDir
+     *    against context.applicationInfo.sourceDir, and verifies its SHA-256 digest.
+     * 2. Automatically falls back to downloading the full per-ABI APK if the user skipped a
+     *    version, the base APK cannot be read, or patch/SHA-256 verification fails.
+     */
+    suspend fun downloadAndPrepareUpdate(
+        release: AppReleaseInfo,
+        onProgress: (Float) -> Unit,
+        onStage: (String) -> Unit = {}
+    ): Result<File> = withContext(Dispatchers.IO) {
+        val safeTag = release.tagName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val patchDir = File(context.cacheDir, "updates").apply { mkdirs() }
+
+        if (release.isDeltaPatchApplicable && !release.patchDownloadUrl.isNullOrBlank()) {
+            val baseApk = runCatching { File(context.applicationInfo.sourceDir) }.getOrNull()
+            if (baseApk != null && baseApk.exists() && baseApk.canRead()) {
+                val patchFile = File(patchDir, "ZeroPlay-$safeTag.patch")
+                val reconstructedApk = File(patchDir, "ZeroPlay-$safeTag-patched.apk")
+                if (patchFile.exists()) patchFile.delete()
+                if (reconstructedApk.exists()) reconstructedApk.delete()
+
+                val deltaResult = runCatching {
+                    onStage("Downloading delta patch...")
+                    downloadApkSingleStream(release.patchDownloadUrl, patchFile) { p ->
+                        onProgress((p * 0.72f).coerceIn(0f, 0.72f))
+                    }
+
+                    onStage("Applying binary delta patch...")
+                    onProgress(0.76f)
+                    VcdiffPatchApplier.applyPatch(
+                        baseApk = baseApk,
+                        patchFile = patchFile,
+                        outputFile = reconstructedApk
+                    ).getOrThrow()
+
+                    onStage("Verifying reconstructed APK...")
+                    onProgress(0.92f)
+                    if (!isValidApkZip(reconstructedApk)) {
+                        error("Reconstructed APK failed ZIP integrity check")
+                    }
+                    val expectedHash = release.expectedSha256?.trim().orEmpty()
+                    if (expectedHash.isNotBlank()) {
+                        val actualHash = VcdiffPatchApplier.computeSha256(reconstructedApk)
+                        if (!actualHash.equals(expectedHash, ignoreCase = true)) {
+                            error("SHA-256 mismatch (expected $expectedHash, got $actualHash)")
+                        }
+                    }
+                    patchFile.delete()
+                    onProgress(1f)
+                    reconstructedApk
+                }
+
+                if (deltaResult.isSuccess) {
+                    return@withContext deltaResult
+                } else {
+                    Log.w(TAG, "Delta patch failed, falling back to full APK", deltaResult.exceptionOrNull())
+                    patchFile.delete()
+                    reconstructedApk.delete()
+                    onStage("Patch verification failed — downloading full APK...")
+                    onProgress(0f)
+                }
+            }
+        }
+
+        val fullUrl = release.fullApkUrl ?: release.apkDownloadUrl
+        if (fullUrl.isNullOrBlank()) {
+            return@withContext Result.failure(IllegalStateException("No downloadable APK URL in release"))
+        }
+        onStage("Downloading APK package...")
+        val fullResult = downloadApk(fullUrl, release.tagName, onProgress)
+        if (fullResult.isSuccess) {
+            val file = fullResult.getOrThrow()
+            val expectedHash = release.expectedSha256?.trim().orEmpty()
+            val isArm64Build = fullUrl.contains("arm64", ignoreCase = true)
+            if (expectedHash.isNotBlank() && isArm64Build) {
+                onStage("Verifying SHA-256 signature...")
+                val actualHash = VcdiffPatchApplier.computeSha256(file)
+                if (!actualHash.equals(expectedHash, ignoreCase = true)) {
+                    file.delete()
+                    return@withContext Result.failure(
+                        SecurityException("Downloaded APK SHA-256 verification failed.")
+                    )
+                }
+            }
+        }
+        fullResult
+    }
+
+    private fun isValidApkZip(file: File): Boolean {
+        return file.length() > 1024L && runCatching {
+            file.inputStream().use { s ->
+                val header = ByteArray(2)
+                s.read(header) == 2 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
+            }
+        }.getOrDefault(false)
     }
 
     /**
@@ -702,6 +956,43 @@ class AppUpdateManager(private val context: Context) {
     }
 
     fun installApk(apkFile: File): Result<Unit> {
+        val sessionInstall = runCatching {
+            val installer = context.packageManager.packageInstaller
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+                setAppPackageName(context.packageName)
+                setSize(apkFile.length())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+                }
+            }
+            val sessionId = installer.createSession(params)
+            installer.openSession(sessionId).use { session ->
+                FileInputStream(apkFile).use { input ->
+                    session.openWrite("zero_play_update.apk", 0L, apkFile.length()).use { output ->
+                        input.copyTo(output, OTA_BUFFER_BYTES)
+                        session.fsync(output)
+                    }
+                }
+                val callbackIntent = Intent(context, PackageInstallResultReceiver::class.java).apply {
+                    action = PackageInstallResultReceiver.ACTION_INSTALL_RESULT
+                }
+                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                } else {
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                }
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    sessionId,
+                    callbackIntent,
+                    flags
+                )
+                session.commit(pendingIntent.intentSender)
+            }
+        }
+        if (sessionInstall.isSuccess) return sessionInstall
+
+        Log.w(TAG, "PackageInstaller commit failed; falling back to ACTION_VIEW", sessionInstall.exceptionOrNull())
         return runCatching {
             val apkUri = FileProvider.getUriForFile(
                 context,

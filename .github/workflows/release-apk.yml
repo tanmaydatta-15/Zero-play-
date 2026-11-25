@@ -168,7 +168,10 @@ jobs:
           PY
 
       - name: Install xdelta3 for Delta OTA Patching
-        run: sudo apt-get update && sudo apt-get install -y xdelta3
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq || true
+          sudo apt-get install -y -qq xdelta3 || true
 
       - name: Build Zero Play Per-ABI & Universal APKs
         run: gradle :app:assembleDebug --no-daemon --stacktrace
@@ -184,6 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release_assets tmp_prev
+          ls -la app/build/outputs/apk/debug/ || true
 
           ARM64_SRC="app/build/outputs/apk/debug/app-arm64-v8a-debug.apk"
           UNIV_SRC="app/build/outputs/apk/debug/app-universal-debug.apk"
@@ -202,7 +206,7 @@ jobs:
           fi
 
           python3 - <<'PY'
-          import datetime, hashlib, json, os, pathlib, subprocess, urllib.request
+          import datetime, hashlib, json, os, pathlib, shutil, subprocess, urllib.request
 
           repo = os.environ["GITHUB_REPOSITORY"]
           tag = os.environ["META_TAG"]
@@ -258,7 +262,7 @@ jobs:
                       prev_manifest = json.loads(mresp.read().decode("utf-8"))
                       base_version_code = int(prev_manifest.get("versionCode", 0))
 
-              if prev_arm64_url and base_version_code > 0:
+              if prev_arm64_url and base_version_code > 0 and shutil.which("xdelta3"):
                   prev_apk_path = pathlib.Path("tmp_prev/previous-arm64.apk")
                   dl_req = urllib.request.Request(prev_arm64_url, headers={"User-Agent": "ZeroPlay-CI"})
                   with urllib.request.urlopen(dl_req, timeout=90) as dl_resp:

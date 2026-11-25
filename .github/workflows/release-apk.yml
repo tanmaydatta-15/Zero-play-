@@ -253,7 +253,7 @@ jobs:
                       break
 
               if prev_manifest_url:
-                  mreq = urllib.request.Request(prev_manifest_url, headers=headers)
+                  mreq = urllib.request.Request(prev_manifest_url, headers={"User-Agent": "ZeroPlay-CI"})
                   with urllib.request.urlopen(mreq, timeout=20) as mresp:
                       prev_manifest = json.loads(mresp.read().decode("utf-8"))
                       base_version_code = int(prev_manifest.get("versionCode", 0))

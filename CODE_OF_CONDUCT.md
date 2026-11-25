@@ -24,4 +24,4 @@ Examples of unacceptable behavior include:
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported via GitHub Issues in [nilimadas567345-sudo/Zero-play-](https://github.com/nilimadas567345-sudo/Zero-play-). All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported via GitHub Issues in [tanmaydatta-15/Zero-play-](https://github.com/tanmaydatta-15/Zero-play-). All complaints will be reviewed and investigated promptly and fairly.

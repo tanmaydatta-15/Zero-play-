@@ -140,7 +140,11 @@ class HybridExtractionRouter private constructor(private val context: Context) {
     fun cancel(taskId: String) {
         cancelledTasks.add(taskId)
         ytDlpEngine.cancel(taskId)
+        ytDlpEngine.cancel("${taskId}_mux")
+        ytDlpEngine.cancel("${taskId}_aud")
         ytDlpEngine.cancel("${taskId}_r2")
+        ytDlpEngine.cancel("${taskId}_r2_mux")
+        ytDlpEngine.cancel("${taskId}_r2_aud")
         FfmpegKitEngine.cancelTask(taskId)
     }
 
@@ -248,17 +252,69 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                     )
                 )
             }
+            if (ytOut.isVideo && ytOut.audioFile != null) {
+                val muxedOut = File(req.workDir, "yt_muxed_${req.taskId}.${effectiveContainer.ext}")
+                val muxed = FfmpegKitEngine.muxStreams(
+                    taskId = req.taskId,
+                    videoFile = ytOut.file,
+                    audioFile = ytOut.audioFile,
+                    outputFile = muxedOut,
+                    container = effectiveContainer,
+                    subtitleFile = ytOut.subtitleFile,
+                    title = if (req.embedMetadata) ytOut.title else null,
+                    artist = if (req.embedMetadata) ytOut.artist else null
+                ) { frac ->
+                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${effectiveContainer.ext.uppercase()}", null))
+                }.getOrThrow()
+                val probed = FfmpegKitEngine.probeMedia(muxed)
+                val badge = probed.videoCodecBadge
+                    ?: if (effectiveCodec != VideoCodecPreference.AUTO) effectiveCodec.shortBadge else effectiveContainer.ext.uppercase()
+                return@withContext Result.success(
+                    HybridDownloadOutput(
+                        file = muxed,
+                        title = ytOut.title,
+                        artist = ytOut.artist,
+                        extension = effectiveContainer.ext,
+                        isVideo = true,
+                        route = ExtractionRoute.YTDLP_UNIVERSAL,
+                        codecBadge = badge
+                    )
+                )
+            }
+            var finalVideoFile = ytOut.file
+            var finalExt = ytOut.extension
+            if (ytOut.isVideo && req.customCommandFlags.isNullOrBlank() && effectiveContainer == VideoContainerOption.MP4) {
+                val probe = FfmpegKitEngine.probeMedia(finalVideoFile)
+                val needsMp4Remux = !finalExt.equals("mp4", ignoreCase = true) ||
+                    (probe.audioCodecBadge != null && probe.audioCodecBadge != "AAC")
+                if (needsMp4Remux) {
+                    val remuxedOut = File(req.workDir, "yt_mp4_${req.taskId}.mp4")
+                    val remuxRes = FfmpegKitEngine.remuxContainer(
+                        taskId = req.taskId,
+                        inputFile = finalVideoFile,
+                        outputFile = remuxedOut,
+                        targetContainer = VideoContainerOption.MP4,
+                        expectedDurationMs = probe.durationMs
+                    ) { frac ->
+                        onProgress(TransferProgress(0.86f + frac * 0.12f, "Encoding AAC MP4", null))
+                    }
+                    if (remuxRes.isSuccess) {
+                        finalVideoFile = remuxRes.getOrThrow()
+                        finalExt = "mp4"
+                    }
+                }
+            }
             val badge = if (effectiveCodec != VideoCodecPreference.AUTO && ytOut.isVideo) {
                 effectiveCodec.shortBadge
             } else {
-                ytOut.extension.uppercase()
+                finalExt.uppercase()
             }
             return@withContext Result.success(
                 HybridDownloadOutput(
-                    file = ytOut.file,
+                    file = finalVideoFile,
                     title = ytOut.title,
                     artist = ytOut.artist,
-                    extension = ytOut.extension,
+                    extension = finalExt,
                     isVideo = ytOut.isVideo,
                     route = ExtractionRoute.YTDLP_UNIVERSAL,
                     codecBadge = badge
@@ -405,11 +461,32 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                 )
             } else {
                 downloadFileAccelerated(req.taskId, videoUrl, streams.videoHeaders, rawVideo) { tp ->
-                    onProgress(tp.copy(fraction = 0.05f + tp.fraction * 0.90f))
+                    onProgress(tp.copy(fraction = 0.05f + tp.fraction * 0.85f))
                 }.getOrThrow()
-                val outExt = rawVideo.extension.lowercase().ifBlank { effectiveContainer.ext }
+                var finalFile = rawVideo
+                var outExt = rawVideo.extension.lowercase().ifBlank { effectiveContainer.ext }
+                if (effectiveContainer == VideoContainerOption.MP4) {
+                    val probe = FfmpegKitEngine.probeMedia(rawVideo)
+                    val needsMp4Remux = outExt != "mp4" || (probe.audioCodecBadge != null && probe.audioCodecBadge != "AAC")
+                    if (needsMp4Remux) {
+                        val remuxedOut = File(req.workDir, "yt_accel_mp4_${req.taskId}.mp4")
+                        val remuxRes = FfmpegKitEngine.remuxContainer(
+                            taskId = req.taskId,
+                            inputFile = rawVideo,
+                            outputFile = remuxedOut,
+                            targetContainer = VideoContainerOption.MP4,
+                            expectedDurationMs = streams.durationSec * 1000L
+                        ) { frac ->
+                            onProgress(TransferProgress(0.90f + frac * 0.08f, "Encoding AAC MP4", null))
+                        }
+                        if (remuxRes.isSuccess) {
+                            finalFile = remuxRes.getOrThrow()
+                            outExt = "mp4"
+                        }
+                    }
+                }
                 HybridDownloadOutput(
-                    file = rawVideo,
+                    file = finalFile,
                     title = streams.title,
                     artist = streams.artist,
                     extension = outExt,

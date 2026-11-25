@@ -266,12 +266,12 @@ fun AutoUpdateScreen(
                     value = repoText,
                     onValueChange = { repoText = it },
                     label = { Text("Public GitHub Repo (owner/repo or URL)") },
-                    placeholder = { Text("nilimadas567345-sudo/Zero-play-") },
+                    placeholder = { Text("tanmaydatta-15/Zero-play-") },
                     leadingIcon = {
                         Icon(Icons.Rounded.Code, contentDescription = null)
                     },
                     trailingIcon = {
-                        val slugOrDefault = repoText.trim().ifBlank { "nilimadas567345-sudo/Zero-play-" }
+                        val slugOrDefault = repoText.trim().ifBlank { "tanmaydatta-15/Zero-play-" }
                         val releasesUrl = if (slugOrDefault.startsWith("http")) {
                             slugOrDefault.removeSuffix(".git").trimEnd('/') + "/releases"
                         } else {
@@ -614,8 +614,8 @@ fun AutoUpdateScreen(
             },
             text = {
                 Text(
-                    text = "Zero Play is pre-configured with nilimadas567345-sudo/Zero-play- and includes .github/workflows/release-apk.yml:\n\n" +
-                        "1. Push changes from Google AI Studio to https://github.com/nilimadas567345-sudo/Zero-play-.\n\n" +
+                    text = "Zero Play is pre-configured with tanmaydatta-15/Zero-play- and includes .github/workflows/release-apk.yml:\n\n" +
+                        "1. Push changes from Google AI Studio to https://github.com/tanmaydatta-15/Zero-play-.\n\n" +
                         "2. GitHub Actions automatically increments versionCode & versionName on every push to main, builds the signed APK, and publishes a new GitHub Release with ZeroPlay-v*.apk + version.json.\n\n" +
                         "3. Zero Play auto-checks on launch (or when you tap Check for updates), compares release titles, tags, version.json, and publish timestamps, downloads the APK in parallel, and opens the Android installer directly.",
                     style = MaterialTheme.typography.bodyMedium,

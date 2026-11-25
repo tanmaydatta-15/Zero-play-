@@ -73,7 +73,7 @@ import androidx.core.content.pm.PackageInfoCompat
 import com.example.R
 
 private const val DEV_INSTAGRAM_URL = "https://www.instagram.com/tanmay.sudo?dmpr=MXdncXZob2xja2k2dA=="
-private const val GITHUB_REPO_URL = "https://github.com/nilimadas567345-sudo/Zero-play-"
+private const val GITHUB_REPO_URL = "https://github.com/tanmaydatta-15/Zero-play-"
 
 private enum class AboutModalType(val title: String, val body: String) {
     CHANGELOG(

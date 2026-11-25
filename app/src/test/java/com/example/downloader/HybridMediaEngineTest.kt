@@ -322,4 +322,60 @@ class HybridMediaEngineTest {
         assertTrue(summary.contains("Version: 2.1.0 (3)"))
         assertTrue(summary.contains("Package: com.aistudio.echomusic.kxmvqr"))
     }
+
+    @Test
+    fun `ffmpeg mux args map both video and audio and encode AAC 192k for MP4`() {
+        val video = java.io.File("/tmp/test_video.mp4")
+        val audio = java.io.File("/tmp/test_audio.webm")
+        val outputMp4 = java.io.File("/tmp/test_output.mp4")
+        val outputMkv = java.io.File("/tmp/test_output.mkv")
+
+        val mp4Args = FfmpegKitEngine.buildMuxArgs(
+            videoFile = video,
+            audioFile = audio,
+            outputFile = outputMp4,
+            container = VideoContainerOption.MP4
+        )
+        val mp4Cmd = mp4Args.joinToString(" ")
+        assertTrue(mp4Cmd.contains("-map 0:v:0 -map 1:a:0"))
+        assertTrue(mp4Cmd.contains("-c:v copy"))
+        assertTrue(mp4Cmd.contains("-c:a aac -b:a 192k"))
+        assertTrue(mp4Cmd.contains("-movflags +faststart"))
+
+        val mkvArgs = FfmpegKitEngine.buildMuxArgs(
+            videoFile = video,
+            audioFile = audio,
+            outputFile = outputMkv,
+            container = VideoContainerOption.MKV
+        )
+        val mkvCmd = mkvArgs.joinToString(" ")
+        assertTrue(mkvCmd.contains("-map 0:v:0 -map 1:a:0"))
+        assertTrue(mkvCmd.contains("-c:v copy -c:a copy"))
+    }
+
+    @Test
+    fun `ytdlp separate stream selector and default auto update repo are configured properly`() {
+        val sepMp4 = YtDlpEngine.buildSeparateVideoAudioSelector(
+            maxVideoHeightPx = 1080,
+            preferredVideoFormat = SealPreferredVideoFormatPref.QUALITY,
+            preferredCodec = VideoCodecPreference.H264,
+            container = VideoContainerOption.MP4
+        )
+        val parts = sepMp4.split(",")
+        assertEquals(2, parts.size)
+        assertTrue(parts[0].contains("bv[height<=1080]"))
+        assertTrue(parts[1].contains("ba[acodec^=mp4a]"))
+
+        val mp4Selector = YtDlpEngine.buildFormatSelector(
+            preset = DownloadFormatPreset.VIDEO_MP4_HIGH,
+            maxVideoHeightPx = 1080,
+            preferredVideoFormat = SealPreferredVideoFormatPref.QUALITY,
+            preferredCodec = VideoCodecPreference.AUTO,
+            container = VideoContainerOption.MP4
+        )
+        assertTrue(mp4Selector.contains("+(ba[acodec^=mp4a]/ba[ext=m4a]/ba)"))
+
+        assertEquals("tanmaydatta-15/Zero-play-", com.example.data.local.EchoSettings().updateRepoSlug)
+        assertEquals("tanmaydatta-15/Zero-play-", com.example.data.local.PreferencesManager.DEFAULT_UPDATE_REPO_SLUG)
+    }
 }

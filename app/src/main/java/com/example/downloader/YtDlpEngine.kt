@@ -20,7 +20,9 @@ data class YtDlpOutput(
     val title: String?,
     val artist: String?,
     val extension: String,
-    val isVideo: Boolean
+    val isVideo: Boolean,
+    val audioFile: File? = null,
+    val subtitleFile: File? = null
 )
 
 data class YtDlpDirectStreams(
@@ -87,10 +89,11 @@ class YtDlpEngine(private val context: Context) {
                 }
             }
             val height = maxVideoHeightPx.coerceAtLeast(360)
+            // Parenthesize audio alternatives so '/' never splits '+' into an audio-only fallback
             val audioSel = if (container != VideoContainerOption.MP4 || audioFormat == SealAudioFormatPref.OPUS) {
-                "ba[acodec^=opus]/ba"
+                "(ba[acodec^=opus]/ba)"
             } else {
-                "ba[acodec^=mp4a]/ba[ext=m4a]/ba"
+                "(ba[acodec^=mp4a]/ba[ext=m4a]/ba)"
             }
             val codecSelector = when (preferredCodec) {
                 VideoCodecPreference.AV1 -> "bv*[height<=${height}][vcodec^=av01]+$audioSel/"
@@ -100,13 +103,47 @@ class YtDlpEngine(private val context: Context) {
                 VideoCodecPreference.AUTO -> ""
             }
             return if (preferredVideoFormat == SealPreferredVideoFormatPref.LEGACY && preferredCodec == VideoCodecPreference.AUTO) {
-                "bv*[height<=${height}][vcodec^=avc1]+ba[acodec^=mp4a]/" +
-                    "bv*[height<=${height}][ext=mp4]+ba[ext=m4a]/" +
+                "bv*[height<=${height}][vcodec^=avc1]+(ba[acodec^=mp4a]/ba)/" +
+                    "bv*[height<=${height}][ext=mp4]+(ba[ext=m4a]/ba)/" +
                     "b[height<=${height}][ext=mp4]/" +
                     "bv*[height<=${height}]+ba/b[height<=${height}]/best"
             } else {
                 "${codecSelector}bv*[height<=${height}]+$audioSel/b[height<=${height}]/bv*+ba/best"
             }
+        }
+
+        /**
+         * Builds a comma-separated yt-dlp selector (`videoOnly,audioOnly`) so yt-dlp downloads both
+         * streams independently into the working directory without requiring its own bundled ffmpeg,
+         * allowing FFmpegKitEngine.muxStreams() to map `-map 0:v:0 -map 1:a:0` and encode AAC for MP4.
+         */
+        internal fun buildSeparateVideoAudioSelector(
+            maxVideoHeightPx: Int,
+            preferredVideoFormat: SealPreferredVideoFormatPref,
+            preferredCodec: VideoCodecPreference = VideoCodecPreference.AUTO,
+            container: VideoContainerOption = VideoContainerOption.MP4,
+            audioFormat: SealAudioFormatPref = SealAudioFormatPref.NOT_SPECIFIED
+        ): String {
+            val height = maxVideoHeightPx.coerceAtLeast(360)
+            val audioOnlySel = if (container != VideoContainerOption.MP4 || audioFormat == SealAudioFormatPref.OPUS) {
+                "ba[acodec^=opus]/ba"
+            } else {
+                "ba[acodec^=mp4a]/ba[ext=m4a]/ba"
+            }
+            val videoOnlySel = when (preferredCodec) {
+                VideoCodecPreference.AV1 -> "bv[height<=${height}][vcodec^=av01]/bv[height<=${height}]"
+                VideoCodecPreference.VP9 -> "bv[height<=${height}][vcodec^=vp9]/bv[height<=${height}][vcodec^=vp09]/bv[height<=${height}]"
+                VideoCodecPreference.HEVC -> "bv[height<=${height}][vcodec^=hev1]/bv[height<=${height}][vcodec^=hvc1]/bv[height<=${height}]"
+                VideoCodecPreference.H264 -> "bv[height<=${height}][vcodec^=avc1]/bv[height<=${height}]"
+                VideoCodecPreference.AUTO -> {
+                    if (preferredVideoFormat == SealPreferredVideoFormatPref.LEGACY) {
+                        "bv[height<=${height}][vcodec^=avc1]/bv[height<=${height}][ext=mp4]/bv[height<=${height}]"
+                    } else {
+                        "bv[height<=${height}]"
+                    }
+                }
+            }
+            return "$videoOnlySel,$audioOnlySel"
         }
 
         internal fun formatEtaSeconds(etaSec: Long): String? {
@@ -230,25 +267,33 @@ class YtDlpEngine(private val context: Context) {
             var videoExt: String? = null
             var videoHeaders: Map<String, String> = baseHeaders
             var videoCodecBadge: String? = null
+            var videoHasEmbeddedAudio = false
             var audioUrl: String? = null
             var audioExt: String? = null
             var audioHeaders: Map<String, String> = baseHeaders
 
             if (requested.isNotEmpty()) {
-                for (fmt in requested) {
+                requested.forEachIndexed { idx, fmt ->
                     val fmtUrl = fmt.url
-                    if (!isDirectHttpMedia(fmtUrl)) continue
+                    if (!isDirectHttpMedia(fmtUrl)) return@forEachIndexed
                     val vcodec = fmt.vcodec.orEmpty().lowercase()
                     val acodec = fmt.acodec.orEmpty().lowercase()
                     val hdrs = fmt.httpHeaders?.filterValues { it.isNotBlank() }?.ifEmpty { baseHeaders } ?: baseHeaders
-                    val hasVideo = vcodec.isNotBlank() && vcodec != "none"
-                    val hasAudio = acodec.isNotBlank() && acodec != "none"
-                    if (hasVideo && videoUrl == null) {
+                    val explicitVideo = vcodec.isNotBlank() && vcodec != "none"
+                    val explicitAudio = acodec.isNotBlank() && acodec != "none"
+                    val isVideoCandidate = explicitVideo || (!explicitAudio && idx == 0 && preset.isVideo)
+                    val isAudioCandidate = (!explicitVideo && explicitAudio) ||
+                        (explicitAudio && videoUrl != null) ||
+                        (requested.size >= 2 && idx == 1 && !explicitVideo)
+                    if (isVideoCandidate && videoUrl == null) {
                         videoUrl = fmtUrl
                         videoExt = fmt.ext?.lowercase()?.ifBlank { "mp4" }
                         videoHeaders = hdrs
-                        videoCodecBadge = com.example.converter.FfmpegKitEngine.normalizeCodecBadge(vcodec)
-                    } else if (hasAudio && audioUrl == null) {
+                        videoCodecBadge = if (explicitVideo) {
+                            com.example.converter.FfmpegKitEngine.normalizeCodecBadge(vcodec)
+                        } else null
+                        videoHasEmbeddedAudio = explicitAudio
+                    } else if (isAudioCandidate && audioUrl == null) {
                         audioUrl = fmtUrl
                         audioExt = fmt.ext?.lowercase()?.ifBlank { "m4a" }
                         audioHeaders = hdrs
@@ -259,10 +304,43 @@ class YtDlpEngine(private val context: Context) {
                     videoUrl = info.url
                     videoExt = info.ext?.lowercase()?.ifBlank { "mp4" }
                     videoHeaders = baseHeaders
+                    videoHasEmbeddedAudio = true
                 } else {
                     audioUrl = info.url
                     audioExt = info.ext?.lowercase()?.ifBlank { "m4a" }
                     audioHeaders = baseHeaders
+                }
+            }
+
+            // If we picked a video-only DASH stream without a companion audio URL, look up best direct audio in info.formats
+            if (preset.isVideo && videoUrl != null && audioUrl == null && !videoHasEmbeddedAudio) {
+                val allFormats = info.formats.orEmpty()
+                val directAudios = allFormats.filter { fmt ->
+                    val vc = fmt.vcodec.orEmpty().lowercase()
+                    val ac = fmt.acodec.orEmpty().lowercase()
+                    (vc.isBlank() || vc == "none") &&
+                        ac.isNotBlank() && ac != "none" &&
+                        isDirectHttpMedia(fmt.url)
+                }
+                val preferredAudio = if (videoContainer == VideoContainerOption.MP4) {
+                    directAudios.filter {
+                        val ac = it.acodec.orEmpty().lowercase()
+                        val ex = it.ext.orEmpty().lowercase()
+                        ac.contains("mp4a") || ac.contains("aac") || ex == "m4a"
+                    }.ifEmpty { directAudios }
+                } else {
+                    directAudios.filter {
+                        it.acodec.orEmpty().lowercase().contains("opus")
+                    }.ifEmpty { directAudios }
+                }.maxByOrNull { it.tbr }
+
+                if (preferredAudio != null) {
+                    audioUrl = preferredAudio.url
+                    audioExt = preferredAudio.ext?.lowercase()?.ifBlank { "m4a" }
+                    audioHeaders = preferredAudio.httpHeaders?.filterValues { it.isNotBlank() }?.ifEmpty { baseHeaders }
+                        ?: baseHeaders
+                } else {
+                    error("Video-only stream has no direct companion audio stream")
                 }
             }
 
@@ -397,111 +475,187 @@ class YtDlpEngine(private val context: Context) {
         onProgress: (TransferProgress) -> Unit
     ): Result<YtDlpOutput> {
         return runCatching {
-            val request = YoutubeDLRequest(url)
             val hasCustomCommands = !customCommandFlags.isNullOrBlank()
+            val height = maxVideoHeightPx.coerceAtLeast(360)
+
+            fun buildBaseRequest(selector: String?): YoutubeDLRequest {
+                val request = YoutubeDLRequest(url)
+                if (hasCustomCommands) {
+                    val tokens = tokenizeCommandFlags(customCommandFlags!!)
+                    var i = 0
+                    var hasOutputTemplate = false
+                    while (i < tokens.size) {
+                        val tok = tokens[i]
+                        if (tok == "-o" || tok == "--output") hasOutputTemplate = true
+                        if (tok.startsWith("-") && i + 1 < tokens.size && !tokens[i + 1].startsWith("-")) {
+                            request.addOption(tok, tokens[i + 1])
+                            i += 2
+                        } else {
+                            request.addOption(tok)
+                            i += 1
+                        }
+                    }
+                    if (!hasOutputTemplate) {
+                        request.addOption("-o", "${workDir.absolutePath}/%(title).80s.f%(format_id)s.%(ext)s")
+                    }
+                } else {
+                    request.addOption("-o", "${workDir.absolutePath}/%(title).80s.f%(format_id)s.%(ext)s")
+                    request.addOption("--no-mtime")
+                    request.addOption("--no-playlist")
+                    request.addOption("--no-part")
+                    request.addOption("--no-check-formats")
+                    request.addOption("--concurrent-fragments", "8")
+                    request.addOption("--http-chunk-size", "4M")
+                    request.addOption("--buffer-size", "128K")
+                    request.addOption("--socket-timeout", "12")
+                    request.addOption("--retries", "3")
+                    request.addOption("--fragment-retries", "3")
+                    request.addOption("--skip-unavailable-fragments")
+
+                    if (restrictFilenames) {
+                        request.addOption("--restrict-filenames")
+                    }
+
+                    if (!selector.isNullOrBlank()) {
+                        request.addOption("-f", selector)
+                    }
+                    if (preset.isVideo) {
+                        preferredCodec.ytDlpSortCodec?.let { sortCodec ->
+                            request.addOption("-S", "vcodec:$sortCodec,res:${height}")
+                        }
+                    }
+                    if (embedSubtitles) {
+                        request.addOption("--write-subs")
+                    }
+                }
+
+                if (!extraPlayerClients.isNullOrBlank()) {
+                    request.addOption("--extractor-args", extraPlayerClients)
+                }
+                return request
+            }
+
+            fun runYtDlp(req: YoutubeDLRequest, procId: String, progressOffset: Float = 0f, progressScale: Float = 0.85f) {
+                YoutubeDL.getInstance().execute(req, procId) { progress, etaInSeconds, line ->
+                    val speed = line?.let { SPEED_REGEX.find(it)?.groupValues?.getOrNull(1) }
+                    val eta = formatEtaSeconds(etaInSeconds)
+                    if (progress >= 0f) {
+                        val mapped = (progressOffset + (progress / 100f) * progressScale).coerceIn(0f, 0.96f)
+                        onProgress(
+                            TransferProgress(
+                                fraction = mapped,
+                                speedLabel = speed,
+                                etaLabel = eta
+                            )
+                        )
+                    }
+                }
+            }
 
             if (hasCustomCommands) {
-                val tokens = tokenizeCommandFlags(customCommandFlags!!)
-                var i = 0
-                var hasOutputTemplate = false
-                while (i < tokens.size) {
-                    val tok = tokens[i]
-                    if (tok == "-o" || tok == "--output") hasOutputTemplate = true
-                    if (tok.startsWith("-") && i + 1 < tokens.size && !tokens[i + 1].startsWith("-")) {
-                        request.addOption(tok, tokens[i + 1])
-                        i += 2
-                    } else {
-                        request.addOption(tok)
-                        i += 1
-                    }
-                }
-                if (!hasOutputTemplate) {
-                    request.addOption("-o", "${workDir.absolutePath}/%(title).80s.%(ext)s")
-                }
+                runYtDlp(buildBaseRequest(null), processId)
+            } else if (!preset.isVideo) {
+                val audioSelector = buildFormatSelector(
+                    preset = preset,
+                    maxVideoHeightPx = maxVideoHeightPx,
+                    preferredVideoFormat = preferredVideoFormat,
+                    preferredCodec = preferredCodec,
+                    container = videoContainer,
+                    audioFormat = audioFormat
+                )
+                runYtDlp(buildBaseRequest(audioSelector), processId)
             } else {
-                request.addOption("-o", "${workDir.absolutePath}/%(title).80s.%(ext)s")
-                request.addOption("--no-mtime")
-                request.addOption("--no-playlist")
-                request.addOption("--no-part")
-                request.addOption("--no-check-formats")
-                request.addOption("--concurrent-fragments", "8")
-                request.addOption("--http-chunk-size", "4M")
-                request.addOption("--buffer-size", "128K")
-                request.addOption("--socket-timeout", "12")
-                request.addOption("--retries", "3")
-                request.addOption("--fragment-retries", "3")
-                request.addOption("--skip-unavailable-fragments")
-
-                if (restrictFilenames) {
-                    request.addOption("--restrict-filenames")
+                // First try downloading separate video-only + audio-only streams for FFmpegKit muxing
+                val separateSelector = buildSeparateVideoAudioSelector(
+                    maxVideoHeightPx = maxVideoHeightPx,
+                    preferredVideoFormat = preferredVideoFormat,
+                    preferredCodec = preferredCodec,
+                    container = videoContainer,
+                    audioFormat = audioFormat
+                )
+                val separateRes = runCatching {
+                    runYtDlp(buildBaseRequest(separateSelector), processId, progressOffset = 0f, progressScale = 0.80f)
                 }
-
-                if (!preset.isVideo) {
-                    request.addOption(
-                        "-f",
-                        buildFormatSelector(
-                            preset = preset,
-                            maxVideoHeightPx = maxVideoHeightPx,
-                            preferredVideoFormat = preferredVideoFormat,
-                            preferredCodec = preferredCodec,
-                            container = videoContainer,
-                            audioFormat = audioFormat
-                        )
-                    )
-                } else {
-                    val height = maxVideoHeightPx.coerceAtLeast(360)
-                    // Without bundled youtubedl-ffmpeg, prefer muxed single-file video streams in fallback mode
-                    val fallbackVideoSelector = "b[height<=${height}][ext=mp4]/b[height<=${height}]/best"
-                    request.addOption("-f", fallbackVideoSelector)
-                    preferredCodec.ytDlpSortCodec?.let { sortCodec ->
-                        request.addOption("-S", "vcodec:$sortCodec,res:${height}")
-                    }
-                }
-
-                if (embedSubtitles) {
-                    request.addOption("--write-subs")
-                }
-            }
-
-            if (!extraPlayerClients.isNullOrBlank()) {
-                request.addOption("--extractor-args", extraPlayerClients)
-            }
-
-            YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
-                val speed = line?.let { SPEED_REGEX.find(it)?.groupValues?.getOrNull(1) }
-                val eta = formatEtaSeconds(etaInSeconds)
-                if (progress >= 0f) {
-                    onProgress(
-                        TransferProgress(
-                            fraction = (progress / 100f).coerceIn(0f, 0.99f),
-                            speedLabel = speed,
-                            etaLabel = eta
-                        )
-                    )
+                if (separateRes.isFailure) {
+                    // Clean partial files and fall back to progressive muxed streams (e.g. Instagram/TikTok/X)
+                    workDir.listFiles()?.forEach { runCatching { it.delete() } }
+                    val muxedSelector = "b[height<=${height}][ext=mp4]/b[height<=${height}]/best"
+                    runYtDlp(buildBaseRequest(muxedSelector), "${processId}_mux", progressOffset = 0f, progressScale = 0.85f)
                 }
             }
 
             val ignoredExts = setOf("part", "ytdl", "tmp", "jpg", "jpeg", "png", "webp", "vtt", "srt", "ass", "json")
-            val producedFile = workDir.listFiles()
+            val mediaFiles = workDir.listFiles()
                 ?.filter { it.isFile && it.length() > 512L && it.extension.lowercase() !in ignoredExts }
-                ?.maxByOrNull { it.length() }
-                ?: error("yt-dlp finished without writing an output media file")
+                .orEmpty()
+                .sortedByDescending { it.length() }
 
-            val ext = producedFile.extension.lowercase().ifBlank {
+            if (mediaFiles.isEmpty()) {
+                error("yt-dlp finished without writing an output media file")
+            }
+
+            val subtitleFile = workDir.listFiles()
+                ?.firstOrNull { it.isFile && it.length() > 0L && it.extension.lowercase() in setOf("vtt", "srt") }
+
+            var videoFile: File = mediaFiles.first()
+            var audioFile: File? = null
+
+            if (preset.isVideo && mediaFiles.size >= 2) {
+                val probed = mediaFiles.map { f -> f to com.example.converter.FfmpegKitEngine.probeMedia(f) }
+                val audioOnlyExts = setOf("m4a", "opus", "ogg", "mp3", "aac", "flac", "wav")
+                val detectedVideo = probed.firstOrNull { (_, p) -> p.videoCodecBadge != null && p.audioCodecBadge == null }?.first
+                    ?: probed.firstOrNull { (_, p) -> p.videoCodecBadge != null }?.first
+                    ?: mediaFiles.firstOrNull { it.extension.lowercase() !in audioOnlyExts }
+                    ?: mediaFiles.first()
+                val detectedAudio = probed.firstOrNull { (f, p) -> f != detectedVideo && p.audioCodecBadge != null && p.videoCodecBadge == null }?.first
+                    ?: probed.firstOrNull { (f, p) -> f != detectedVideo && p.audioCodecBadge != null }?.first
+                    ?: mediaFiles.firstOrNull { it != detectedVideo && it.extension.lowercase() in audioOnlyExts }
+                    ?: mediaFiles.firstOrNull { it != detectedVideo }
+                videoFile = detectedVideo
+                audioFile = detectedAudio
+            } else if (preset.isVideo && !hasCustomCommands && mediaFiles.size == 1) {
+                // Verify the single downloaded video file actually contains an audio track; if not, fetch companion audio
+                val probe = com.example.converter.FfmpegKitEngine.probeMedia(videoFile)
+                if (probe.videoCodecBadge != null && probe.audioCodecBadge == null) {
+                    val audioDir = File(workDir, "audio_companion").apply { mkdirs() }
+                    val audioReq = YoutubeDLRequest(url).apply {
+                        addOption("-o", "${audioDir.absolutePath}/audio.f%(format_id)s.%(ext)s")
+                        addOption("--no-mtime")
+                        addOption("--no-playlist")
+                        addOption("--no-part")
+                        addOption("--no-check-formats")
+                        addOption("-f", "ba[acodec^=mp4a]/ba[ext=m4a]/ba/bestaudio")
+                        if (!extraPlayerClients.isNullOrBlank()) {
+                            addOption("--extractor-args", extraPlayerClients)
+                        }
+                    }
+                    runCatching {
+                        runYtDlp(audioReq, "${processId}_aud", progressOffset = 0.72f, progressScale = 0.12f)
+                        audioFile = audioDir.listFiles()
+                            ?.filter { it.isFile && it.length() > 512L && it.extension.lowercase() !in ignoredExts }
+                            ?.maxByOrNull { it.length() }
+                    }
+                }
+            }
+
+            val ext = videoFile.extension.lowercase().ifBlank {
                 if (preset.isVideo) videoContainer.ext else "m4a"
             }
-            val inferredTitle = producedFile.nameWithoutExtension
+            val inferredTitle = videoFile.nameWithoutExtension
+                .replace(Regex("\\.f[A-Za-z0-9_-]+$"), "")
                 .replace('_', ' ')
                 .trim()
                 .takeIf { it.isNotBlank() }
 
             val isOutVideo = ext in setOf("mp4", "mkv", "webm", "mov", "avi")
             YtDlpOutput(
-                file = producedFile,
+                file = videoFile,
                 title = inferredTitle,
                 artist = inferSiteLabel(url),
                 extension = ext,
-                isVideo = if (hasCustomCommands) isOutVideo else preset.isVideo
+                isVideo = if (hasCustomCommands) isOutVideo else preset.isVideo,
+                audioFile = audioFile,
+                subtitleFile = subtitleFile
             )
         }
     }

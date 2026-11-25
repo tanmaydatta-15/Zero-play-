@@ -88,6 +88,63 @@ object FfmpegKitEngine {
         }
     }
 
+    internal fun buildMuxArgs(
+        videoFile: File,
+        audioFile: File,
+        outputFile: File,
+        container: VideoContainerOption,
+        subtitleFile: File? = null,
+        title: String? = null,
+        artist: String? = null,
+        reencodeVideoToH264: Boolean = false
+    ): List<String> {
+        val hasSubtitle = subtitleFile != null && subtitleFile.exists()
+        val args = mutableListOf(
+            "-y",
+            "-i", videoFile.absolutePath,
+            "-i", audioFile.absolutePath
+        )
+        if (hasSubtitle) {
+            args += listOf("-i", subtitleFile!!.absolutePath)
+        }
+        // Explicitly map primary video from input 0 and primary audio from input 1
+        args += listOf("-map", "0:v:0", "-map", "1:a:0")
+        if (hasSubtitle) {
+            args += listOf("-map", "2:s:0")
+        }
+
+        when (container) {
+            VideoContainerOption.MKV -> {
+                // Matroska natively holds AV1/VP9/HEVC/H.264 + Opus/AAC/FLAC + soft subtitles without re-encoding
+                args += listOf("-c:v", "copy", "-c:a", "copy")
+                if (hasSubtitle) {
+                    args += listOf("-c:s", "srt")
+                }
+            }
+            VideoContainerOption.WEBM -> {
+                args += listOf("-c:v", "copy", "-c:a", "copy")
+            }
+            VideoContainerOption.MP4 -> {
+                if (reencodeVideoToH264) {
+                    args += listOf("-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p")
+                } else {
+                    args += listOf("-c:v", "copy")
+                }
+                // Always encode audio to AAC 192k for universal MP4 playback compatibility
+                args += listOf("-c:a", "aac", "-b:a", "192k")
+                if (hasSubtitle) {
+                    args += listOf("-c:s", "mov_text")
+                }
+                args += listOf("-movflags", "+faststart")
+            }
+        }
+
+        if (!title.isNullOrBlank()) args += listOf("-metadata", "title=$title")
+        if (!artist.isNullOrBlank()) args += listOf("-metadata", "artist=$artist")
+        args += outputFile.absolutePath
+        return args
+    }
+
     suspend fun muxStreams(
         taskId: String,
         videoFile: File,
@@ -100,51 +157,37 @@ object FfmpegKitEngine {
         expectedDurationMs: Long = 0L,
         onProgress: (Float) -> Unit = {}
     ): Result<File> = withContext(Dispatchers.IO) {
-        val args = mutableListOf(
-            "-y",
-            "-i", videoFile.absolutePath,
-            "-i", audioFile.absolutePath
+        val primaryArgs = buildMuxArgs(
+            videoFile = videoFile,
+            audioFile = audioFile,
+            outputFile = outputFile,
+            container = container,
+            subtitleFile = subtitleFile,
+            title = title,
+            artist = artist,
+            reencodeVideoToH264 = false
         )
-        if (subtitleFile != null && subtitleFile.exists()) {
-            args += listOf("-i", subtitleFile.absolutePath)
+        val primary = executeCommand(taskId, primaryArgs, expectedDurationMs, onProgress, outputFile)
+        if (primary.isSuccess || container != VideoContainerOption.MP4) {
+            return@withContext primary
         }
-        args += listOf("-map", "0:v:0", "-map", "1:a:0")
-        if (subtitleFile != null && subtitleFile.exists()) {
-            args += listOf("-map", "2:s:0")
-        }
-
-        when (container) {
-            VideoContainerOption.MKV -> {
-                // Matroska natively holds AV1/VP9/HEVC/H.264 + Opus/AAC/FLAC + soft subtitles without re-encoding
-                args += listOf("-c:v", "copy", "-c:a", "copy")
-                if (subtitleFile != null && subtitleFile.exists()) {
-                    args += listOf("-c:s", "srt")
-                }
-            }
-            VideoContainerOption.WEBM -> {
-                args += listOf("-c:v", "copy", "-c:a", "copy")
-            }
-            VideoContainerOption.MP4 -> {
-                val audioProbe = probeMedia(audioFile)
-                val needsAacReencode = audioProbe.audioCodecBadge in setOf("OPUS", "FLAC", "VORBIS")
-                args += listOf("-c:v", "copy")
-                if (needsAacReencode) {
-                    args += listOf("-c:a", "aac", "-b:a", "192k")
-                } else {
-                    args += listOf("-c:a", "copy")
-                }
-                if (subtitleFile != null && subtitleFile.exists()) {
-                    args += listOf("-c:s", "mov_text")
-                }
-                args += listOf("-movflags", "+faststart")
-            }
+        val errMsg = primary.exceptionOrNull()?.message.orEmpty()
+        if (errMsg.contains("Cancelled", ignoreCase = true)) {
+            return@withContext primary
         }
 
-        if (!title.isNullOrBlank()) args += listOf("-metadata", "title=$title")
-        if (!artist.isNullOrBlank()) args += listOf("-metadata", "artist=$artist")
-        args += outputFile.absolutePath
-
-        executeCommand(taskId, args, expectedDurationMs, onProgress, outputFile)
+        // Fallback if MP4 muxer rejected stream-copying an exotic video codec: keep both streams mapped and AAC 192k audio
+        val fallbackArgs = buildMuxArgs(
+            videoFile = videoFile,
+            audioFile = audioFile,
+            outputFile = outputFile,
+            container = VideoContainerOption.MP4,
+            subtitleFile = subtitleFile,
+            title = title,
+            artist = artist,
+            reencodeVideoToH264 = true
+        )
+        executeCommand(taskId, fallbackArgs, expectedDurationMs, onProgress, outputFile)
     }
 
     suspend fun remuxContainer(
@@ -155,33 +198,60 @@ object FfmpegKitEngine {
         expectedDurationMs: Long = 0L,
         onProgress: (Float) -> Unit = {}
     ): Result<File> = withContext(Dispatchers.IO) {
-        val copyArgs = mutableListOf(
+        if (targetContainer == VideoContainerOption.MP4) {
+            val mp4Args = listOf(
+                "-y",
+                "-i", inputFile.absolutePath,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                outputFile.absolutePath
+            )
+            val mp4Res = executeCommand(taskId, mp4Args, expectedDurationMs, onProgress, outputFile)
+            if (mp4Res.isSuccess) return@withContext mp4Res
+            val errMsg = mp4Res.exceptionOrNull()?.message.orEmpty()
+            if (errMsg.contains("Cancelled", ignoreCase = true)) return@withContext mp4Res
+
+            val h264Fallback = listOf(
+                "-y",
+                "-i", inputFile.absolutePath,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                outputFile.absolutePath
+            )
+            return@withContext executeCommand(taskId, h264Fallback, expectedDurationMs, onProgress, outputFile)
+        }
+
+        val copyArgs = listOf(
             "-y",
             "-i", inputFile.absolutePath,
             "-map", "0",
-            "-c", "copy"
+            "-c", "copy",
+            outputFile.absolutePath
         )
-        if (targetContainer == VideoContainerOption.MP4) {
-            copyArgs += listOf("-movflags", "+faststart")
-        }
-        copyArgs += outputFile.absolutePath
-
         val copyRes = executeCommand(taskId, copyArgs, expectedDurationMs, onProgress, outputFile)
         if (copyRes.isSuccess) return@withContext copyRes
 
-        // Fallback: copy video, re-encode audio to universally compatible AAC/Opus if container rejected audio track
         val fallbackAudioCodec = if (targetContainer == VideoContainerOption.MKV) "libopus" else "aac"
-        val fallbackArgs = mutableListOf(
+        val fallbackArgs = listOf(
             "-y",
             "-i", inputFile.absolutePath,
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
             "-c:v", "copy",
             "-c:a", fallbackAudioCodec,
-            "-b:a", "192k"
+            "-b:a", "192k",
+            outputFile.absolutePath
         )
-        if (targetContainer == VideoContainerOption.MP4) {
-            fallbackArgs += listOf("-movflags", "+faststart")
-        }
-        fallbackArgs += outputFile.absolutePath
         executeCommand(taskId, fallbackArgs, expectedDurationMs, onProgress, outputFile)
     }
 

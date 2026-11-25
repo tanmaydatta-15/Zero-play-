@@ -19,6 +19,15 @@ import kotlinx.coroutines.flow.map
 private val Context.echoDataStore by preferencesDataStore(name = "echo_preferences")
 
 class PreferencesManager(private val context: Context) {
+    companion object {
+        const val DEFAULT_UPDATE_REPO_SLUG = "tanmaydatta-15/Zero-play-"
+        private val LEGACY_DEFAULT_REPO_SLUGS = setOf(
+            "nilimadas567345-sudo/Zero-play-",
+            "https://github.com/nilimadas567345-sudo/Zero-play-",
+            "http://github.com/nilimadas567345-sudo/Zero-play-"
+        )
+    }
+
     private object Keys {
         // Appearance
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -172,7 +181,12 @@ class PreferencesManager(private val context: Context) {
 
             autoUpdateEnabled = prefs[Keys.AUTO_UPDATE_ENABLED] ?: true,
             updateChannel = parseEnum(prefs[Keys.UPDATE_CHANNEL], UpdateChannelPref.STABLE),
-            updateRepoSlug = prefs[Keys.UPDATE_REPO_SLUG]?.takeIf { it.isNotBlank() } ?: "nilimadas567345-sudo/Zero-play-",
+            updateRepoSlug = prefs[Keys.UPDATE_REPO_SLUG]
+                ?.trim()
+                ?.takeIf { stored ->
+                    stored.isNotBlank() && LEGACY_DEFAULT_REPO_SLUGS.none { it.equals(stored, ignoreCase = true) }
+                }
+                ?: DEFAULT_UPDATE_REPO_SLUG,
             directUpdateFeedUrl = prefs[Keys.DIRECT_UPDATE_FEED_URL].orEmpty()
         )
     }

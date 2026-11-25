@@ -215,6 +215,6 @@ data class EchoSettings(
     // Auto Update (GitHub Releases / Direct Feed)
     val autoUpdateEnabled: Boolean = true,
     val updateChannel: UpdateChannelPref = UpdateChannelPref.STABLE,
-    val updateRepoSlug: String = "nilimadas567345-sudo/Zero-play-",
+    val updateRepoSlug: String = "tanmaydatta-15/Zero-play-",
     val directUpdateFeedUrl: String = ""
 )

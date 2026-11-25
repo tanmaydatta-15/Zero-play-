@@ -260,7 +260,7 @@ class AppUpdateManager(private val context: Context) {
         val slug = parseGitHubSlug(repoInput)
         if (slug == null) {
             return@withContext UpdateCheckOutcome.NeedsConfiguration(
-                "Enter a public GitHub repository (e.g. nilimadas567345-sudo/Zero-play-) or a direct APK / version.json URL below."
+                "Enter a public GitHub repository (e.g. tanmaydatta-15/Zero-play-) or a direct APK / version.json URL below."
             )
         }
 

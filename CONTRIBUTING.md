@@ -4,7 +4,7 @@ Thank you for your interest in contributing to **Zero Play**!
 
 ## Ways to Contribute
 
-- **Bug Reports:** Open an issue in [nilimadas567345-sudo/Zero-play-](https://github.com/nilimadas567345-sudo/Zero-play-/issues) with your Android version, device model, and steps to reproduce.
+- **Bug Reports:** Open an issue in [tanmaydatta-15/Zero-play-](https://github.com/tanmaydatta-15/Zero-play-/issues) with your Android version, device model, and steps to reproduce.
 - **Feature Suggestions:** Propose improvements to audio/video playback, media conversion presets, downloader workflows, or UI polish.
 - **Pull Requests:**
   1. Fork the repository and create a descriptive branch (`feat/...` or `fix/...`).

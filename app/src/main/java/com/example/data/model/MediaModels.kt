@@ -142,6 +142,7 @@ enum class DownloadFormatPreset(
     val extension: String,
     val isVideo: Boolean
 ) {
+    VIDEO_MKV_HEVC("Video MKV • H.265 + Opus", "HEVC (H.265) + Opus lossless remux • .mkv", "mkv", true),
     VIDEO_MKV_AV1("Video MKV • AV1 + Opus", "AOMedia AV1 + Opus lossless mux • .mkv", "mkv", true),
     VIDEO_MKV_HIGH("Video MKV • 1080p Universal", "VP9 / HEVC / H.264 + Opus • .mkv", "mkv", true),
     VIDEO_MP4_4K("Video MP4 • 2160p 4K", "Ultra HD AV1 / HEVC / H.264 • .mp4", "mp4", true),

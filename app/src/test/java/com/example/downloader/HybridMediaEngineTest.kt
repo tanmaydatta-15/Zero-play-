@@ -378,4 +378,94 @@ class HybridMediaEngineTest {
         assertEquals("tanmaydatta-15/Zero-play-", com.example.data.local.EchoSettings().updateRepoSlug)
         assertEquals("tanmaydatta-15/Zero-play-", com.example.data.local.PreferencesManager.DEFAULT_UPDATE_REPO_SLUG)
     }
+
+    @Test
+    fun `hevc plus opus streams route to lossless mkv remux without transcoding`() {
+        val hevcMkvSelector = YtDlpEngine.buildFormatSelector(
+            preset = DownloadFormatPreset.VIDEO_MKV_HEVC,
+            maxVideoHeightPx = 1080,
+            preferredVideoFormat = SealPreferredVideoFormatPref.QUALITY,
+            preferredCodec = VideoCodecPreference.HEVC,
+            container = VideoContainerOption.MKV,
+            audioFormat = SealAudioFormatPref.OPUS
+        )
+        assertTrue(hevcMkvSelector.contains("vcodec^=hev1"))
+        assertTrue(hevcMkvSelector.contains("vcodec^=hvc1"))
+        assertTrue(hevcMkvSelector.contains("acodec^=opus"))
+
+        val hevcSepSelector = YtDlpEngine.buildSeparateVideoAudioSelector(
+            maxVideoHeightPx = 2160,
+            preferredVideoFormat = SealPreferredVideoFormatPref.QUALITY,
+            preferredCodec = VideoCodecPreference.HEVC,
+            container = VideoContainerOption.MKV,
+            audioFormat = SealAudioFormatPref.OPUS
+        )
+        val sepParts = hevcSepSelector.split(",")
+        assertEquals(2, sepParts.size)
+        assertTrue(sepParts[0].contains("vcodec^=hev1"))
+        assertTrue(sepParts[1].contains("ba[acodec^=opus]"))
+
+        // Auto-upgrade to MKV when HEVC video + Opus audio are paired even if MP4 was initially requested
+        assertEquals(
+            VideoContainerOption.MKV,
+            HybridExtractionRouter.resolveOutputContainer(
+                requestedContainer = VideoContainerOption.MP4,
+                preset = DownloadFormatPreset.VIDEO_MP4_HIGH,
+                videoCodecBadge = "HEVC",
+                audioCodecBadge = "OPUS",
+                audioExtension = "webm"
+            )
+        )
+        assertEquals(
+            VideoContainerOption.MKV,
+            HybridExtractionRouter.resolveOutputContainer(
+                requestedContainer = VideoContainerOption.MP4,
+                preset = DownloadFormatPreset.VIDEO_MKV_HEVC,
+                videoCodecBadge = "H.265",
+                audioCodecBadge = "OPUS",
+                audioExtension = "opus"
+            )
+        )
+        // Standard H.264 + AAC stays MP4
+        assertEquals(
+            VideoContainerOption.MP4,
+            HybridExtractionRouter.resolveOutputContainer(
+                requestedContainer = VideoContainerOption.MP4,
+                preset = DownloadFormatPreset.VIDEO_MP4_HIGH,
+                videoCodecBadge = "H.264",
+                audioCodecBadge = "AAC",
+                audioExtension = "m4a"
+            )
+        )
+
+        // Lossless MKV mux command maps both video & audio with stream copy (-c:v copy -c:a copy)
+        val mkvArgs = FfmpegKitEngine.buildMuxArgs(
+            videoFile = java.io.File("/tmp/hevc_video.mp4"),
+            audioFile = java.io.File("/tmp/opus_audio.webm"),
+            outputFile = java.io.File("/tmp/output_hevc_opus.mkv"),
+            container = VideoContainerOption.MKV
+        )
+        val mkvCmd = mkvArgs.joinToString(" ")
+        assertTrue(mkvCmd.contains("-map 0:v:0 -map 1:a:0"))
+        assertTrue(mkvCmd.contains("-c:v copy -c:a copy"))
+        assertFalse(mkvCmd.contains("-c:a aac"))
+    }
+
+    @Test
+    fun `video aspect ratio mode cycles cleanly between fit fill and zoom`() {
+        val fit = com.example.ui.screens.VideoAspectRatioMode.FIT
+        val fill = fit.next()
+        val zoom = fill.next()
+        val backToFit = zoom.next()
+
+        assertEquals("Fit", fit.label)
+        assertEquals(androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT, fit.resizeMode)
+        assertEquals(com.example.ui.screens.VideoAspectRatioMode.FILL, fill)
+        assertEquals("Fill", fill.label)
+        assertEquals(androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL, fill.resizeMode)
+        assertEquals(com.example.ui.screens.VideoAspectRatioMode.ZOOM, zoom)
+        assertEquals("Zoom", zoom.label)
+        assertEquals(androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM, zoom.resizeMode)
+        assertEquals(fit, backToFit)
+    }
 }

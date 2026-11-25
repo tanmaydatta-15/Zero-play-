@@ -234,8 +234,10 @@ object FfmpegKitEngine {
         val copyArgs = listOf(
             "-y",
             "-i", inputFile.absolutePath,
-            "-map", "0",
-            "-c", "copy",
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            "-c:v", "copy",
+            "-c:a", "copy",
             outputFile.absolutePath
         )
         val copyRes = executeCommand(taskId, copyArgs, expectedDurationMs, onProgress, outputFile)

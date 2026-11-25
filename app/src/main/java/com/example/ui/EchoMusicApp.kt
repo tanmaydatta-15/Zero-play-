@@ -85,6 +85,7 @@ import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.VideoPlayerScreen
 import com.example.ui.sheets.AddToPlaylistDialog
 import com.example.ui.sheets.AudioExtractorSheet
 import com.example.ui.sheets.CodecDiagnosticSheet
@@ -410,57 +411,63 @@ fun EchoMusicApp(
             }
         }
 
-        // Full-Screen Now Playing, Music Flow, Synchronized Lyrics, Video & PiP Overlay
+        // Full-Screen Dedicated Video Player or Music Now Playing Overlay
         AnimatedVisibility(
             visible = (uiState.isPlayerExpanded || uiState.isInPipMode) && playbackState.currentTrack != null,
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it })
         ) {
-            NowPlayingScreen(
-                playbackState = playbackState,
-                player = viewModel.playbackController.playerOrNull,
-                isFullBleedMode = settings.fullBleedPlayer,
-                playerBlurBackground = settings.playerBlurBackground,
-                showQualityBadge = settings.showQualityBadge,
-                showSongDnaBadge = settings.showSongDnaBadge,
-                wordByWordLyrics = settings.wordByWordLyrics,
-                isFullScreenVideo = uiState.isFullScreenVideo,
-                isInPipMode = uiState.isInPipMode,
-                onCollapse = { viewModel.setPlayerExpanded(false) },
-                onToggleFullBleed = viewModel::toggleFullBleedPlayer,
-                onTogglePlayPause = { viewModel.playbackController.togglePlayPause() },
-                onSeekTo = { viewModel.playbackController.seekTo(it) },
-                onSkipNext = { viewModel.playbackController.skipNext() },
-                onSkipPrevious = { viewModel.playbackController.skipPrevious() },
-                onToggleLike = viewModel::toggleLike,
-                onDownloadTrack = { track ->
-                    viewModel.openDownloadSheet(
-                        if (track.uriString.startsWith("http")) track.uriString else ""
-                    )
-                },
-                onSetSpeed = { viewModel.playbackController.setPlaybackSpeed(it) },
-                onToggleShuffle = { viewModel.playbackController.toggleShuffle() },
-                onCycleRepeat = { viewModel.playbackController.cycleRepeatMode() },
-                onToggleFullscreenVideo = { viewModel.setFullScreenVideo(!uiState.isFullScreenVideo) },
-                onEnterPipMode = onEnterPipMode,
-                onConvertOrExtract = { track ->
-                    viewModel.setPlayerExpanded(false)
-                    if (track.mediaType == MediaType.VIDEO) {
-                        viewModel.openAudioExtractor(Uri.parse(track.uriString), track.title)
-                    } else {
+            if (playbackState.currentTrack?.mediaType == MediaType.VIDEO) {
+                VideoPlayerScreen(
+                    playbackState = playbackState,
+                    player = viewModel.playbackController.playerOrNull,
+                    isFullScreen = uiState.isFullScreenVideo,
+                    isInPipMode = uiState.isInPipMode,
+                    onBack = { viewModel.setPlayerExpanded(false) },
+                    onTogglePlayPause = { viewModel.playbackController.togglePlayPause() },
+                    onSeekTo = { viewModel.playbackController.seekTo(it) },
+                    onSetSpeed = { viewModel.playbackController.setPlaybackSpeed(it) },
+                    onToggleFullScreen = { viewModel.setFullScreenVideo(!uiState.isFullScreenVideo) },
+                    onEnterPipMode = onEnterPipMode
+                )
+            } else {
+                NowPlayingScreen(
+                    playbackState = playbackState,
+                    isFullBleedMode = settings.fullBleedPlayer,
+                    playerBlurBackground = settings.playerBlurBackground,
+                    showQualityBadge = settings.showQualityBadge,
+                    showSongDnaBadge = settings.showSongDnaBadge,
+                    wordByWordLyrics = settings.wordByWordLyrics,
+                    onCollapse = { viewModel.setPlayerExpanded(false) },
+                    onToggleFullBleed = viewModel::toggleFullBleedPlayer,
+                    onTogglePlayPause = { viewModel.playbackController.togglePlayPause() },
+                    onSeekTo = { viewModel.playbackController.seekTo(it) },
+                    onSkipNext = { viewModel.playbackController.skipNext() },
+                    onSkipPrevious = { viewModel.playbackController.skipPrevious() },
+                    onToggleLike = viewModel::toggleLike,
+                    onDownloadTrack = { track ->
+                        viewModel.openDownloadSheet(
+                            if (track.uriString.startsWith("http")) track.uriString else ""
+                        )
+                    },
+                    onSetSpeed = { viewModel.playbackController.setPlaybackSpeed(it) },
+                    onToggleShuffle = { viewModel.playbackController.toggleShuffle() },
+                    onCycleRepeat = { viewModel.playbackController.cycleRepeatMode() },
+                    onConvertOrExtract = { track ->
+                        viewModel.setPlayerExpanded(false)
                         currentTab = EchoTab.CONVERT
                         viewModel.openAudioExtractor()
+                    },
+                    onAddToPlaylist = viewModel::openPlaylistPickerForTrack,
+                    onSelectQueueTrack = { track ->
+                        viewModel.playTrack(track, playbackState.queue)
+                    },
+                    onOpenSettings = {
+                        viewModel.setPlayerExpanded(false)
+                        viewModel.openSettings(true)
                     }
-                },
-                onAddToPlaylist = viewModel::openPlaylistPickerForTrack,
-                onSelectQueueTrack = { track ->
-                    viewModel.playTrack(track, playbackState.queue)
-                },
-                onOpenSettings = {
-                    viewModel.setPlayerExpanded(false)
-                    viewModel.openSettings(true)
-                }
-            )
+                )
+            }
         }
 
         // Full-Screen Settings Overlay

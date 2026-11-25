@@ -39,6 +39,7 @@ class MediaDownloadManager(
     companion object {
         fun defaultHeightForPreset(preset: DownloadFormatPreset): Int = when (preset) {
             DownloadFormatPreset.VIDEO_MP4_4K -> 2160
+            DownloadFormatPreset.VIDEO_MKV_HEVC,
             DownloadFormatPreset.VIDEO_MKV_AV1,
             DownloadFormatPreset.VIDEO_MKV_HIGH,
             DownloadFormatPreset.VIDEO_MP4_HIGH -> 1080

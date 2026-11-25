@@ -260,10 +260,10 @@ fun MediaDownloaderSheet(
                 SealAudioFormatPref.M4A -> DownloadFormatPreset.AUDIO_M4A_HIGH
             }
         } else if (videoContainer == SealVideoContainerPref.MKV) {
-            if (preferredCodec == VideoCodecPreference.AV1) {
-                DownloadFormatPreset.VIDEO_MKV_AV1
-            } else {
-                DownloadFormatPreset.VIDEO_MKV_HIGH
+            when (preferredCodec) {
+                VideoCodecPreference.HEVC -> DownloadFormatPreset.VIDEO_MKV_HEVC
+                VideoCodecPreference.AV1 -> DownloadFormatPreset.VIDEO_MKV_AV1
+                else -> DownloadFormatPreset.VIDEO_MKV_HIGH
             }
         } else {
             when (videoQualityLimit) {

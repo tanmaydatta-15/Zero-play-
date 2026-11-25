@@ -268,7 +268,12 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setPlayerExpanded(expanded: Boolean) {
-        _uiState.update { it.copy(isPlayerExpanded = expanded) }
+        _uiState.update {
+            it.copy(
+                isPlayerExpanded = expanded,
+                isFullScreenVideo = if (!expanded) false else it.isFullScreenVideo
+            )
+        }
     }
 
     fun setFullScreenVideo(fullscreen: Boolean) {
@@ -789,6 +794,8 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
         playbackController.applyAudioEngineSettings(s.skipSilence, s.pauseOnHeadsetDisconnect)
         if (track.mediaType == MediaType.VIDEO) {
             _uiState.update { it.copy(isPlayerExpanded = true) }
+        } else {
+            _uiState.update { it.copy(isFullScreenVideo = false) }
         }
     }
 

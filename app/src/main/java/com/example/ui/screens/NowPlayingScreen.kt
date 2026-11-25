@@ -31,16 +31,12 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.Forward10
-import androidx.compose.material.icons.rounded.Fullscreen
-import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -48,11 +44,9 @@ import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
-import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
@@ -78,7 +72,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,17 +98,12 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.MediaSource
 import com.example.data.model.MediaTrack
-import com.example.data.model.MediaType
 import com.example.playback.PlaybackUiState
 import com.example.ui.components.TrackArtwork
 import com.example.ui.components.cleanArtistLabel
@@ -157,14 +145,11 @@ private val Cookie9SidedShape = object : Shape {
 @Composable
 fun NowPlayingScreen(
     playbackState: PlaybackUiState,
-    player: Player?,
     isFullBleedMode: Boolean,
     playerBlurBackground: Boolean = true,
     showQualityBadge: Boolean = true,
     showSongDnaBadge: Boolean = true,
     wordByWordLyrics: Boolean = true,
-    isFullScreenVideo: Boolean,
-    isInPipMode: Boolean,
     onCollapse: () -> Unit,
     onToggleFullBleed: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -176,8 +161,6 @@ fun NowPlayingScreen(
     onSetSpeed: (Float) -> Unit,
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
-    onToggleFullscreenVideo: () -> Unit,
-    onEnterPipMode: () -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
     onAddToPlaylist: (MediaTrack) -> Unit,
     onSelectQueueTrack: (MediaTrack) -> Unit,
@@ -188,7 +171,6 @@ fun NowPlayingScreen(
     val view = LocalView.current
     val context = LocalContext.current
     var showSongDnaSheet by remember { mutableStateOf(false) }
-    var zoomVideoFill by rememberSaveable { mutableStateOf(false) }
 
     // Always force crisp white status & nav bar icons on top of the dark Now Playing backdrop,
     // even when the app is in Light Mode, and restore previous light/dark flags when collapsed.
@@ -208,88 +190,10 @@ fun NowPlayingScreen(
     }
 
     BackHandler {
-        if (isFullScreenVideo) {
-            onToggleFullscreenVideo()
-        } else {
-            onCollapse()
-        }
+        onCollapse()
     }
 
-    if (isInPipMode && track.mediaType == MediaType.VIDEO) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-        ) {
-            VideoPlayerSurface(
-                player = player,
-                zoomFill = zoomVideoFill,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        return
-    }
-
-    if (isFullScreenVideo && track.mediaType == MediaType.VIDEO) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-        ) {
-            VideoPlayerSurface(
-                player = player,
-                zoomFill = zoomVideoFill,
-                modifier = Modifier.fillMaxSize()
-            )
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                IconButton(
-                    onClick = { zoomVideoFill = !zoomVideoFill },
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.55f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AspectRatio,
-                        contentDescription = if (zoomVideoFill) "Fit video" else "Zoom fill video",
-                        tint = Color.White
-                    )
-                }
-                IconButton(
-                    onClick = onEnterPipMode,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.55f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PictureInPictureAlt,
-                        contentDescription = stringResource(R.string.action_pip),
-                        tint = Color.White
-                    )
-                }
-                IconButton(
-                    onClick = onToggleFullscreenVideo,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.55f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.FullscreenExit,
-                        contentDescription = stringResource(R.string.action_fullscreen),
-                        tint = Color.White
-                    )
-                }
-            }
-        }
-        return
-    }
-
-    // 3 Zero Play Pages: Song/Video, Lyrics (word-by-word), Music Flow (Queue)
+    // 3 Zero Play Music Pages: Song, Lyrics (word-by-word), Music Flow (Queue)
     val pagerState = rememberPagerState(pageCount = { 3 })
     var speedMenuExpanded by remember { mutableStateOf(false) }
     var moreMenuExpanded by remember { mutableStateOf(false) }
@@ -371,17 +275,13 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Mode Switcher Pill (Song/Video | Lyrics | Flow)
+                // Mode Switcher Pill (Song | Lyrics | Flow)
                 Surface(
                     shape = CircleShape,
                     color = Color.White.copy(alpha = 0.14f)
                 ) {
                     Row(modifier = Modifier.padding(3.dp)) {
-                        val labels = listOf(
-                            if (track.mediaType == MediaType.VIDEO) "Video" else "Song",
-                            "Lyrics",
-                            "Flow"
-                        )
+                        val labels = listOf("Song", "Lyrics", "Flow")
                         labels.forEachIndexed { pageIndex, label ->
                             val selected = pagerState.currentPage == pageIndex
                             Surface(
@@ -404,34 +304,18 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                if (track.mediaType == MediaType.VIDEO) {
-                    IconButton(
-                        onClick = onEnterPipMode,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.12f))
-                            .testTag("now_playing_pip_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.PictureInPictureAlt,
-                            contentDescription = stringResource(R.string.action_pip),
-                            tint = Color.White
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = onToggleFullBleed,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.12f))
-                            .testTag("now_playing_fullbleed_toggle")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.OpenInFull,
-                            contentDescription = "Toggle full-bleed art",
-                            tint = Color.White
-                        )
-                    }
+                IconButton(
+                    onClick = onToggleFullBleed,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.12f))
+                        .testTag("now_playing_fullbleed_toggle")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.OpenInFull,
+                        contentDescription = "Toggle full-bleed art",
+                        tint = Color.White
+                    )
                 }
             }
 
@@ -443,16 +327,13 @@ fun NowPlayingScreen(
                     0 -> PlayerMainPage(
                         track = track,
                         playbackState = playbackState,
-                        player = player,
                         isFullBleedMode = isFullBleedMode,
-                        zoomVideoFill = zoomVideoFill,
                         showQualityBadge = showQualityBadge,
                         showSongDnaBadge = showSongDnaBadge,
                         speedMenuExpanded = speedMenuExpanded,
                         moreMenuExpanded = moreMenuExpanded,
                         onSpeedMenuExpandedChange = { speedMenuExpanded = it },
                         onMoreMenuExpandedChange = { moreMenuExpanded = it },
-                        onToggleVideoZoom = { zoomVideoFill = !zoomVideoFill },
                         onTogglePlayPause = onTogglePlayPause,
                         onSeekTo = onSeekTo,
                         onSkipNext = onSkipNext,
@@ -462,7 +343,6 @@ fun NowPlayingScreen(
                         onSetSpeed = onSetSpeed,
                         onToggleShuffle = onToggleShuffle,
                         onCycleRepeat = onCycleRepeat,
-                        onToggleFullscreenVideo = onToggleFullscreenVideo,
                         onOpenLyrics = { scope.launch { pagerState.animateScrollToPage(1) } },
                         onOpenSongDna = { showSongDnaSheet = true },
                         onConvertOrExtract = { onConvertOrExtract(track) },
@@ -506,16 +386,13 @@ fun NowPlayingScreen(
 private fun PlayerMainPage(
     track: MediaTrack,
     playbackState: PlaybackUiState,
-    player: Player?,
     isFullBleedMode: Boolean,
-    zoomVideoFill: Boolean,
     showQualityBadge: Boolean,
     showSongDnaBadge: Boolean,
     speedMenuExpanded: Boolean,
     moreMenuExpanded: Boolean,
     onSpeedMenuExpandedChange: (Boolean) -> Unit,
     onMoreMenuExpandedChange: (Boolean) -> Unit,
-    onToggleVideoZoom: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onSkipNext: () -> Unit,
@@ -525,7 +402,6 @@ private fun PlayerMainPage(
     onSetSpeed: (Float) -> Unit,
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
-    onToggleFullscreenVideo: () -> Unit,
     onOpenLyrics: () -> Unit,
     onOpenSongDna: () -> Unit,
     onConvertOrExtract: () -> Unit,
@@ -536,69 +412,19 @@ private fun PlayerMainPage(
         modifier = Modifier
             .fillMaxSize()
             .padding(
-                horizontal = if (isFullBleedMode && track.mediaType != MediaType.VIDEO) 0.dp else 24.dp,
+                horizontal = if (isFullBleedMode) 0.dp else 24.dp,
                 vertical = 8.dp
             ),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // Artwork or Video Surface
+        // Album Artwork
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
             contentAlignment = Alignment.Center
         ) {
-            if (track.mediaType == MediaType.VIDEO) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color.Black)
-                ) {
-                    VideoPlayerSurface(
-                        player = player,
-                        zoomFill = zoomVideoFill,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        IconButton(
-                            onClick = onToggleVideoZoom,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                                .testTag("video_resize_mode_btn")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.AspectRatio,
-                                contentDescription = if (zoomVideoFill) "Fit video" else "Fill video",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = onToggleFullscreenVideo,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Fullscreen,
-                                contentDescription = stringResource(R.string.action_fullscreen),
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-            } else if (isFullBleedMode) {
+            if (isFullBleedMode) {
                 val safeFullBleedArt = safeDrawableResId(track.artworkResId, R.drawable.img_cover_midnight_1794995218900)
                 Box(
                     modifier = Modifier
@@ -648,7 +474,7 @@ private fun PlayerMainPage(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = if (isFullBleedMode && track.mediaType != MediaType.VIDEO) 24.dp else 0.dp)
+                .padding(horizontal = if (isFullBleedMode) 24.dp else 0.dp)
         ) {
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -780,30 +606,15 @@ private fun PlayerMainPage(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (track.mediaType == MediaType.VIDEO) {
-                    IconButton(
-                        onClick = { onSeekTo((playbackState.positionMs - 10_000L).coerceAtLeast(0L)) },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("now_playing_replay10_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Replay10,
-                            contentDescription = "Rewind 10 seconds",
-                            tint = Color.White
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = onToggleShuffle,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Shuffle,
-                            contentDescription = "Shuffle",
-                            tint = if (playbackState.shuffleEnabled) Color.White else Color.White.copy(alpha = 0.45f)
-                        )
-                    }
+                IconButton(
+                    onClick = onToggleShuffle,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Shuffle,
+                        contentDescription = "Shuffle",
+                        tint = if (playbackState.shuffleEnabled) Color.White else Color.White.copy(alpha = 0.45f)
+                    )
                 }
 
                 IconButton(
@@ -855,37 +666,19 @@ private fun PlayerMainPage(
                     )
                 }
 
-                if (track.mediaType == MediaType.VIDEO) {
-                    IconButton(
-                        onClick = {
-                            val maxPos = playbackState.durationMs.coerceAtLeast(playbackState.positionMs)
-                            onSeekTo((playbackState.positionMs + 10_000L).coerceAtMost(maxPos))
+                IconButton(
+                    onClick = onCycleRepeat,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = if (playbackState.repeatMode == Player.REPEAT_MODE_ONE) {
+                            Icons.Rounded.RepeatOne
+                        } else {
+                            Icons.Rounded.Repeat
                         },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("now_playing_forward10_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Forward10,
-                            contentDescription = "Forward 10 seconds",
-                            tint = Color.White
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = onCycleRepeat,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (playbackState.repeatMode == Player.REPEAT_MODE_ONE) {
-                                Icons.Rounded.RepeatOne
-                            } else {
-                                Icons.Rounded.Repeat
-                            },
-                            contentDescription = "Repeat",
-                            tint = if (playbackState.repeatMode != Player.REPEAT_MODE_OFF) Color.White else Color.White.copy(alpha = 0.45f)
-                        )
-                    }
+                        contentDescription = "Repeat",
+                        tint = if (playbackState.repeatMode != Player.REPEAT_MODE_OFF) Color.White else Color.White.copy(alpha = 0.45f)
+                    )
                 }
             }
 
@@ -1496,38 +1289,6 @@ private fun PlaybackProgressSlider(
             )
         }
     }
-}
-
-@androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-private fun VideoPlayerSurface(
-    player: Player?,
-    zoomFill: Boolean = false,
-    modifier: Modifier = Modifier
-) {
-    val targetResizeMode = if (zoomFill) {
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-    } else {
-        AspectRatioFrameLayout.RESIZE_MODE_FIT
-    }
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                useController = false
-                resizeMode = targetResizeMode
-                this.player = player
-            }
-        },
-        update = { view ->
-            if (view.player !== player) {
-                view.player = player
-            }
-            if (view.resizeMode != targetResizeMode) {
-                view.resizeMode = targetResizeMode
-            }
-        },
-        modifier = modifier
-    )
 }
 
 private tailrec fun Context.findActivityOrNull(): Activity? = when (this) {

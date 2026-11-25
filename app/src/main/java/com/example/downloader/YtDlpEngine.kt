@@ -35,7 +35,8 @@ data class YtDlpDirectStreams(
     val videoCodecBadge: String?,
     val audioUrl: String?,
     val audioExtension: String?,
-    val audioHeaders: Map<String, String>
+    val audioHeaders: Map<String, String>,
+    val audioCodecBadge: String? = null
 )
 
 data class TransferProgress(
@@ -89,8 +90,12 @@ class YtDlpEngine(private val context: Context) {
                 }
             }
             val height = maxVideoHeightPx.coerceAtLeast(360)
-            // Parenthesize audio alternatives so '/' never splits '+' into an audio-only fallback
-            val audioSel = if (container != VideoContainerOption.MP4 || audioFormat == SealAudioFormatPref.OPUS) {
+            // Parenthesize audio alternatives so '/' never splits '+' into an audio-only fallback.
+            // Prefer Opus audio when saving MKV or preserving H.265 (HEVC) + Opus without transcoding.
+            val preferOpusAudio = container != VideoContainerOption.MP4 ||
+                audioFormat == SealAudioFormatPref.OPUS ||
+                (preferredCodec == VideoCodecPreference.HEVC && audioFormat != SealAudioFormatPref.M4A)
+            val audioSel = if (preferOpusAudio) {
                 "(ba[acodec^=opus]/ba)"
             } else {
                 "(ba[acodec^=mp4a]/ba[ext=m4a]/ba)"
@@ -98,7 +103,11 @@ class YtDlpEngine(private val context: Context) {
             val codecSelector = when (preferredCodec) {
                 VideoCodecPreference.AV1 -> "bv*[height<=${height}][vcodec^=av01]+$audioSel/"
                 VideoCodecPreference.VP9 -> "bv*[height<=${height}][vcodec^=vp9]+$audioSel/bv*[height<=${height}][vcodec^=vp09]+$audioSel/"
-                VideoCodecPreference.HEVC -> "bv*[height<=${height}][vcodec^=hev1]+$audioSel/bv*[height<=${height}][vcodec^=hvc1]+$audioSel/"
+                VideoCodecPreference.HEVC ->
+                    "bv*[height<=${height}][vcodec^=hev1]+$audioSel/" +
+                        "bv*[height<=${height}][vcodec^=hvc1]+$audioSel/" +
+                        "bv*[height<=${height}][vcodec^=hevc]+$audioSel/" +
+                        "bv*[height<=${height}][vcodec^=h265]+$audioSel/"
                 VideoCodecPreference.H264 -> "bv*[height<=${height}][vcodec^=avc1]+$audioSel/"
                 VideoCodecPreference.AUTO -> ""
             }
@@ -115,7 +124,8 @@ class YtDlpEngine(private val context: Context) {
         /**
          * Builds a comma-separated yt-dlp selector (`videoOnly,audioOnly`) so yt-dlp downloads both
          * streams independently into the working directory without requiring its own bundled ffmpeg,
-         * allowing FFmpegKitEngine.muxStreams() to map `-map 0:v:0 -map 1:a:0` and encode AAC for MP4.
+         * allowing FFmpegKitEngine.muxStreams() to map `-map 0:v:0 -map 1:a:0` and stream-copy
+         * H.265 + Opus into `.mkv` (or encode AAC for `.mp4`).
          */
         internal fun buildSeparateVideoAudioSelector(
             maxVideoHeightPx: Int,
@@ -125,7 +135,10 @@ class YtDlpEngine(private val context: Context) {
             audioFormat: SealAudioFormatPref = SealAudioFormatPref.NOT_SPECIFIED
         ): String {
             val height = maxVideoHeightPx.coerceAtLeast(360)
-            val audioOnlySel = if (container != VideoContainerOption.MP4 || audioFormat == SealAudioFormatPref.OPUS) {
+            val preferOpusAudio = container != VideoContainerOption.MP4 ||
+                audioFormat == SealAudioFormatPref.OPUS ||
+                (preferredCodec == VideoCodecPreference.HEVC && audioFormat != SealAudioFormatPref.M4A)
+            val audioOnlySel = if (preferOpusAudio) {
                 "ba[acodec^=opus]/ba"
             } else {
                 "ba[acodec^=mp4a]/ba[ext=m4a]/ba"
@@ -133,7 +146,12 @@ class YtDlpEngine(private val context: Context) {
             val videoOnlySel = when (preferredCodec) {
                 VideoCodecPreference.AV1 -> "bv[height<=${height}][vcodec^=av01]/bv[height<=${height}]"
                 VideoCodecPreference.VP9 -> "bv[height<=${height}][vcodec^=vp9]/bv[height<=${height}][vcodec^=vp09]/bv[height<=${height}]"
-                VideoCodecPreference.HEVC -> "bv[height<=${height}][vcodec^=hev1]/bv[height<=${height}][vcodec^=hvc1]/bv[height<=${height}]"
+                VideoCodecPreference.HEVC ->
+                    "bv[height<=${height}][vcodec^=hev1]/" +
+                        "bv[height<=${height}][vcodec^=hvc1]/" +
+                        "bv[height<=${height}][vcodec^=hevc]/" +
+                        "bv[height<=${height}][vcodec^=h265]/" +
+                        "bv[height<=${height}]"
                 VideoCodecPreference.H264 -> "bv[height<=${height}][vcodec^=avc1]/bv[height<=${height}]"
                 VideoCodecPreference.AUTO -> {
                     if (preferredVideoFormat == SealPreferredVideoFormatPref.LEGACY) {
@@ -271,6 +289,7 @@ class YtDlpEngine(private val context: Context) {
             var audioUrl: String? = null
             var audioExt: String? = null
             var audioHeaders: Map<String, String> = baseHeaders
+            var audioCodecBadge: String? = null
 
             if (requested.isNotEmpty()) {
                 requested.forEachIndexed { idx, fmt ->
@@ -293,10 +312,18 @@ class YtDlpEngine(private val context: Context) {
                             com.example.converter.FfmpegKitEngine.normalizeCodecBadge(vcodec)
                         } else null
                         videoHasEmbeddedAudio = explicitAudio
+                        if (explicitAudio && audioCodecBadge == null) {
+                            audioCodecBadge = com.example.converter.FfmpegKitEngine.normalizeCodecBadge(acodec)
+                        }
                     } else if (isAudioCandidate && audioUrl == null) {
                         audioUrl = fmtUrl
                         audioExt = fmt.ext?.lowercase()?.ifBlank { "m4a" }
                         audioHeaders = hdrs
+                        audioCodecBadge = if (explicitAudio) {
+                            com.example.converter.FfmpegKitEngine.normalizeCodecBadge(acodec)
+                        } else if (audioExt == "opus") {
+                            "OPUS"
+                        } else null
                     }
                 }
             } else if (isDirectHttpMedia(info.url)) {
@@ -322,15 +349,18 @@ class YtDlpEngine(private val context: Context) {
                         ac.isNotBlank() && ac != "none" &&
                         isDirectHttpMedia(fmt.url)
                 }
-                val preferredAudio = if (videoContainer == VideoContainerOption.MP4) {
+                val preferOpus = videoContainer != VideoContainerOption.MP4 ||
+                    audioFormat == SealAudioFormatPref.OPUS ||
+                    (videoCodecBadge == "HEVC" && audioFormat != SealAudioFormatPref.M4A)
+                val preferredAudio = if (preferOpus) {
+                    directAudios.filter {
+                        it.acodec.orEmpty().lowercase().contains("opus")
+                    }.ifEmpty { directAudios }
+                } else {
                     directAudios.filter {
                         val ac = it.acodec.orEmpty().lowercase()
                         val ex = it.ext.orEmpty().lowercase()
                         ac.contains("mp4a") || ac.contains("aac") || ex == "m4a"
-                    }.ifEmpty { directAudios }
-                } else {
-                    directAudios.filter {
-                        it.acodec.orEmpty().lowercase().contains("opus")
                     }.ifEmpty { directAudios }
                 }.maxByOrNull { it.tbr }
 
@@ -339,6 +369,10 @@ class YtDlpEngine(private val context: Context) {
                     audioExt = preferredAudio.ext?.lowercase()?.ifBlank { "m4a" }
                     audioHeaders = preferredAudio.httpHeaders?.filterValues { it.isNotBlank() }?.ifEmpty { baseHeaders }
                         ?: baseHeaders
+                    val ac = preferredAudio.acodec.orEmpty().lowercase()
+                    if (ac.isNotBlank() && ac != "none") {
+                        audioCodecBadge = com.example.converter.FfmpegKitEngine.normalizeCodecBadge(ac)
+                    }
                 } else {
                     error("Video-only stream has no direct companion audio stream")
                 }
@@ -361,7 +395,8 @@ class YtDlpEngine(private val context: Context) {
                 videoCodecBadge = videoCodecBadge,
                 audioUrl = audioUrl ?: if (!preset.isVideo) videoUrl else null,
                 audioExtension = audioExt ?: if (!preset.isVideo) videoExt else null,
-                audioHeaders = audioHeaders
+                audioHeaders = audioHeaders,
+                audioCodecBadge = audioCodecBadge
             )
         }
     }
@@ -618,13 +653,21 @@ class YtDlpEngine(private val context: Context) {
                 val probe = com.example.converter.FfmpegKitEngine.probeMedia(videoFile)
                 if (probe.videoCodecBadge != null && probe.audioCodecBadge == null) {
                     val audioDir = File(workDir, "audio_companion").apply { mkdirs() }
+                    val preferOpus = videoContainer != VideoContainerOption.MP4 ||
+                        audioFormat == SealAudioFormatPref.OPUS ||
+                        (preferredCodec == VideoCodecPreference.HEVC && audioFormat != SealAudioFormatPref.M4A)
+                    val companionAudioSel = if (preferOpus) {
+                        "ba[acodec^=opus]/ba/bestaudio"
+                    } else {
+                        "ba[acodec^=mp4a]/ba[ext=m4a]/ba/bestaudio"
+                    }
                     val audioReq = YoutubeDLRequest(url).apply {
                         addOption("-o", "${audioDir.absolutePath}/audio.f%(format_id)s.%(ext)s")
                         addOption("--no-mtime")
                         addOption("--no-playlist")
                         addOption("--no-part")
                         addOption("--no-check-formats")
-                        addOption("-f", "ba[acodec^=mp4a]/ba[ext=m4a]/ba/bestaudio")
+                        addOption("-f", companionAudioSel)
                         if (!extraPlayerClients.isNullOrBlank()) {
                             addOption("--extractor-args", extraPlayerClients)
                         }

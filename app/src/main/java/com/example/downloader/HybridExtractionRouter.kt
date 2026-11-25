@@ -104,6 +104,31 @@ class HybridExtractionRouter private constructor(private val context: Context) {
             }
             return ranges
         }
+
+        /**
+         * Preserves H.265 (HEVC) video + Opus audio without transcoding by routing to `.mkv`
+         * (`-map 0:v:0 -map 1:a:0 -c:v copy -c:a copy`), so Opus plays natively in Media3 ExoPlayer.
+         */
+        internal fun resolveOutputContainer(
+            requestedContainer: VideoContainerOption,
+            preset: DownloadFormatPreset,
+            videoCodecBadge: String?,
+            audioCodecBadge: String?,
+            audioExtension: String? = null
+        ): VideoContainerOption {
+            if (preset.extension.equals("mkv", ignoreCase = true) || requestedContainer == VideoContainerOption.MKV) {
+                return VideoContainerOption.MKV
+            }
+            val isHevcVideo = videoCodecBadge.equals("HEVC", ignoreCase = true) ||
+                videoCodecBadge.equals("H.265", ignoreCase = true)
+            val isOpusAudio = audioCodecBadge.equals("OPUS", ignoreCase = true) ||
+                audioExtension.equals("opus", ignoreCase = true) ||
+                audioExtension.equals("webm", ignoreCase = true)
+            if (isHevcVideo && isOpusAudio) {
+                return VideoContainerOption.MKV
+            }
+            return requestedContainer
+        }
     }
 
     private val streamClient: OkHttpClient by lazy {
@@ -253,28 +278,39 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                 )
             }
             if (ytOut.isVideo && ytOut.audioFile != null) {
-                val muxedOut = File(req.workDir, "yt_muxed_${req.taskId}.${effectiveContainer.ext}")
+                val videoProbe = FfmpegKitEngine.probeMedia(ytOut.file)
+                val audioProbe = FfmpegKitEngine.probeMedia(ytOut.audioFile)
+                val resolvedVideoBadge = videoProbe.videoCodecBadge
+                    ?: if (effectiveCodec != VideoCodecPreference.AUTO) effectiveCodec.shortBadge else null
+                val muxContainer = resolveOutputContainer(
+                    requestedContainer = effectiveContainer,
+                    preset = req.preset,
+                    videoCodecBadge = resolvedVideoBadge,
+                    audioCodecBadge = audioProbe.audioCodecBadge,
+                    audioExtension = ytOut.audioFile.extension
+                )
+                val muxedOut = File(req.workDir, "yt_muxed_${req.taskId}.${muxContainer.ext}")
                 val muxed = FfmpegKitEngine.muxStreams(
                     taskId = req.taskId,
                     videoFile = ytOut.file,
                     audioFile = ytOut.audioFile,
                     outputFile = muxedOut,
-                    container = effectiveContainer,
+                    container = muxContainer,
                     subtitleFile = ytOut.subtitleFile,
                     title = if (req.embedMetadata) ytOut.title else null,
-                    artist = if (req.embedMetadata) ytOut.artist else null
+                    artist = if (req.embedMetadata) ytOut.artist else null,
+                    expectedDurationMs = maxOf(videoProbe.durationMs, audioProbe.durationMs)
                 ) { frac ->
-                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${effectiveContainer.ext.uppercase()}", null))
+                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${muxContainer.ext.uppercase()}", null))
                 }.getOrThrow()
                 val probed = FfmpegKitEngine.probeMedia(muxed)
-                val badge = probed.videoCodecBadge
-                    ?: if (effectiveCodec != VideoCodecPreference.AUTO) effectiveCodec.shortBadge else effectiveContainer.ext.uppercase()
+                val badge = probed.videoCodecBadge ?: resolvedVideoBadge ?: muxContainer.ext.uppercase()
                 return@withContext Result.success(
                     HybridDownloadOutput(
                         file = muxed,
                         title = ytOut.title,
                         artist = ytOut.artist,
-                        extension = effectiveContainer.ext,
+                        extension = muxContainer.ext,
                         isVideo = true,
                         route = ExtractionRoute.YTDLP_UNIVERSAL,
                         codecBadge = badge
@@ -283,24 +319,48 @@ class HybridExtractionRouter private constructor(private val context: Context) {
             }
             var finalVideoFile = ytOut.file
             var finalExt = ytOut.extension
-            if (ytOut.isVideo && req.customCommandFlags.isNullOrBlank() && effectiveContainer == VideoContainerOption.MP4) {
+            if (ytOut.isVideo && req.customCommandFlags.isNullOrBlank()) {
                 val probe = FfmpegKitEngine.probeMedia(finalVideoFile)
-                val needsMp4Remux = !finalExt.equals("mp4", ignoreCase = true) ||
-                    (probe.audioCodecBadge != null && probe.audioCodecBadge != "AAC")
-                if (needsMp4Remux) {
-                    val remuxedOut = File(req.workDir, "yt_mp4_${req.taskId}.mp4")
-                    val remuxRes = FfmpegKitEngine.remuxContainer(
+                val targetContainer = resolveOutputContainer(
+                    requestedContainer = effectiveContainer,
+                    preset = req.preset,
+                    videoCodecBadge = probe.videoCodecBadge,
+                    audioCodecBadge = probe.audioCodecBadge,
+                    audioExtension = finalExt
+                )
+                if (targetContainer == VideoContainerOption.MKV && !finalExt.equals("mkv", ignoreCase = true)) {
+                    val mkvOut = File(req.workDir, "yt_mkv_${req.taskId}.mkv")
+                    val mkvRes = FfmpegKitEngine.remuxContainer(
                         taskId = req.taskId,
                         inputFile = finalVideoFile,
-                        outputFile = remuxedOut,
-                        targetContainer = VideoContainerOption.MP4,
+                        outputFile = mkvOut,
+                        targetContainer = VideoContainerOption.MKV,
                         expectedDurationMs = probe.durationMs
                     ) { frac ->
-                        onProgress(TransferProgress(0.86f + frac * 0.12f, "Encoding AAC MP4", null))
+                        onProgress(TransferProgress(0.86f + frac * 0.12f, "Remuxing MKV", null))
                     }
-                    if (remuxRes.isSuccess) {
-                        finalVideoFile = remuxRes.getOrThrow()
-                        finalExt = "mp4"
+                    if (mkvRes.isSuccess) {
+                        finalVideoFile = mkvRes.getOrThrow()
+                        finalExt = "mkv"
+                    }
+                } else if (targetContainer == VideoContainerOption.MP4) {
+                    val needsMp4Remux = !finalExt.equals("mp4", ignoreCase = true) ||
+                        (probe.audioCodecBadge != null && probe.audioCodecBadge != "AAC")
+                    if (needsMp4Remux) {
+                        val remuxedOut = File(req.workDir, "yt_mp4_${req.taskId}.mp4")
+                        val remuxRes = FfmpegKitEngine.remuxContainer(
+                            taskId = req.taskId,
+                            inputFile = finalVideoFile,
+                            outputFile = remuxedOut,
+                            targetContainer = VideoContainerOption.MP4,
+                            expectedDurationMs = probe.durationMs
+                        ) { frac ->
+                            onProgress(TransferProgress(0.86f + frac * 0.12f, "Encoding AAC MP4", null))
+                        }
+                        if (remuxRes.isSuccess) {
+                            finalVideoFile = remuxRes.getOrThrow()
+                            finalExt = "mp4"
+                        }
                     }
                 }
             }
@@ -436,28 +496,37 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                     awaitAll(vJob, aJob)
                 }
 
-                val muxedOut = File(req.workDir, "yt_accel_muxed_${req.taskId}.${effectiveContainer.ext}")
+                val videoBadge = streams.videoCodecBadge ?: FfmpegKitEngine.probeMedia(rawVideo).videoCodecBadge
+                val audioBadge = streams.audioCodecBadge ?: FfmpegKitEngine.probeMedia(rawAudio).audioCodecBadge
+                val muxContainer = resolveOutputContainer(
+                    requestedContainer = effectiveContainer,
+                    preset = req.preset,
+                    videoCodecBadge = videoBadge,
+                    audioCodecBadge = audioBadge,
+                    audioExtension = rawAudio.extension
+                )
+                val muxedOut = File(req.workDir, "yt_accel_muxed_${req.taskId}.${muxContainer.ext}")
                 val muxed = FfmpegKitEngine.muxStreams(
                     taskId = req.taskId,
                     videoFile = rawVideo,
                     audioFile = rawAudio,
                     outputFile = muxedOut,
-                    container = effectiveContainer,
+                    container = muxContainer,
                     title = if (req.embedMetadata) streams.title else null,
                     artist = if (req.embedMetadata) streams.artist else null,
                     expectedDurationMs = streams.durationSec * 1000L
                 ) { frac ->
-                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${effectiveContainer.ext.uppercase()}", null))
+                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${muxContainer.ext.uppercase()}", null))
                 }.getOrThrow()
 
                 HybridDownloadOutput(
                     file = muxed,
                     title = streams.title,
                     artist = streams.artist,
-                    extension = effectiveContainer.ext,
+                    extension = muxContainer.ext,
                     isVideo = true,
                     route = ExtractionRoute.YTDLP_UNIVERSAL,
-                    codecBadge = streams.videoCodecBadge ?: effectiveContainer.ext.uppercase()
+                    codecBadge = videoBadge ?: muxContainer.ext.uppercase()
                 )
             } else {
                 downloadFileAccelerated(req.taskId, videoUrl, streams.videoHeaders, rawVideo) { tp ->
@@ -465,8 +534,30 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                 }.getOrThrow()
                 var finalFile = rawVideo
                 var outExt = rawVideo.extension.lowercase().ifBlank { effectiveContainer.ext }
-                if (effectiveContainer == VideoContainerOption.MP4) {
-                    val probe = FfmpegKitEngine.probeMedia(rawVideo)
+                val probe = FfmpegKitEngine.probeMedia(rawVideo)
+                val targetContainer = resolveOutputContainer(
+                    requestedContainer = effectiveContainer,
+                    preset = req.preset,
+                    videoCodecBadge = streams.videoCodecBadge ?: probe.videoCodecBadge,
+                    audioCodecBadge = streams.audioCodecBadge ?: probe.audioCodecBadge,
+                    audioExtension = outExt
+                )
+                if (targetContainer == VideoContainerOption.MKV && outExt != "mkv") {
+                    val mkvOut = File(req.workDir, "yt_accel_mkv_${req.taskId}.mkv")
+                    val mkvRes = FfmpegKitEngine.remuxContainer(
+                        taskId = req.taskId,
+                        inputFile = rawVideo,
+                        outputFile = mkvOut,
+                        targetContainer = VideoContainerOption.MKV,
+                        expectedDurationMs = streams.durationSec * 1000L
+                    ) { frac ->
+                        onProgress(TransferProgress(0.90f + frac * 0.08f, "Remuxing MKV", null))
+                    }
+                    if (mkvRes.isSuccess) {
+                        finalFile = mkvRes.getOrThrow()
+                        outExt = "mkv"
+                    }
+                } else if (targetContainer == VideoContainerOption.MP4) {
                     val needsMp4Remux = outExt != "mp4" || (probe.audioCodecBadge != null && probe.audioCodecBadge != "AAC")
                     if (needsMp4Remux) {
                         val remuxedOut = File(req.workDir, "yt_accel_mp4_${req.taskId}.mp4")
@@ -492,7 +583,7 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                     extension = outExt,
                     isVideo = true,
                     route = ExtractionRoute.YTDLP_UNIVERSAL,
-                    codecBadge = streams.videoCodecBadge ?: outExt.uppercase()
+                    codecBadge = streams.videoCodecBadge ?: probe.videoCodecBadge ?: outExt.uppercase()
                 )
             }
         }
@@ -605,27 +696,34 @@ class HybridExtractionRouter private constructor(private val context: Context) {
                     subJob.await()
                 }
 
-                val muxedOut = File(req.workDir, "np_muxed_${req.taskId}.${effectiveContainer.ext}")
+                val muxContainer = resolveOutputContainer(
+                    requestedContainer = effectiveContainer,
+                    preset = req.preset,
+                    videoCodecBadge = extracted.videoCodecBadge,
+                    audioCodecBadge = extracted.audioCodecBadge,
+                    audioExtension = rawAudio.extension
+                )
+                val muxedOut = File(req.workDir, "np_muxed_${req.taskId}.${muxContainer.ext}")
                 val muxed = FfmpegKitEngine.muxStreams(
                     taskId = req.taskId,
                     videoFile = rawVideo,
                     audioFile = rawAudio,
                     outputFile = muxedOut,
-                    container = effectiveContainer,
+                    container = muxContainer,
                     subtitleFile = subFile,
                     title = if (req.embedMetadata) extracted.title else null,
                     artist = if (req.embedMetadata) extracted.uploader else null,
                     expectedDurationMs = extracted.durationSec * 1000L
                 ) { frac ->
-                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${effectiveContainer.ext.uppercase()}", null))
+                    onProgress(TransferProgress(0.84f + frac * 0.14f, "Muxing ${muxContainer.ext.uppercase()}", null))
                 }.getOrThrow()
 
-                val badge = extracted.videoCodecBadge ?: effectiveContainer.ext.uppercase()
+                val badge = extracted.videoCodecBadge ?: muxContainer.ext.uppercase()
                 HybridDownloadOutput(
                     file = muxed,
                     title = extracted.title,
                     artist = extracted.uploader,
-                    extension = effectiveContainer.ext,
+                    extension = muxContainer.ext,
                     isVideo = true,
                     route = ExtractionRoute.NEWPIPE_FAST,
                     codecBadge = badge

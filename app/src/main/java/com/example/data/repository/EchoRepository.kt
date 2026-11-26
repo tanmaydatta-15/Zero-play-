@@ -258,13 +258,14 @@ class EchoRepository(
                     val fileId = cursor.getLong(idCol)
                     val displayName = cursor.getString(nameCol).orEmpty()
                     val ext = displayName.substringAfterLast('.', "").lowercase()
-                    if (ext !in setOf("mp4", "mkv", "webm", "mp3", "opus", "m4a", "flac")) continue
+                    if (ext !in setOf("mp4", "mkv", "webm", "mp3", "opus", "iamf", "m4a", "flac")) continue
                     val isVideo = ext in setOf("mp4", "mkv", "webm")
                     val contentUri = ContentUris.withAppendedId(filesUri, fileId)
                     val relPath = if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else ""
                     val mime = (if (mimeCol >= 0) cursor.getString(mimeCol) else null) ?: when (ext) {
                         "mkv" -> "video/x-matroska"
                         "webm" -> "video/webm"
+                        "iamf" -> "audio/iamf"
                         "opus" -> "audio/opus"
                         "flac" -> "audio/flac"
                         "mp3" -> "audio/mpeg"
@@ -351,7 +352,8 @@ class EchoRepository(
         uriString: String,
         mediaType: MediaType,
         mimeType: String,
-        sizeBytes: Long
+        sizeBytes: Long,
+        artworkUriString: String? = null
     ) {
         dao.upsertTrack(
             TrackRecordEntity(
@@ -362,7 +364,7 @@ class EchoRepository(
                 durationMs = 0L,
                 uriString = uriString,
                 artworkResId = if (mediaType == MediaType.VIDEO) R.drawable.img_cover_aurora_1794995218098 else R.drawable.img_cover_velvet_1794995218473,
-                artworkUriString = if (mediaType == MediaType.VIDEO) uriString else null,
+                artworkUriString = artworkUriString ?: if (mediaType == MediaType.VIDEO) uriString else null,
                 mediaType = mediaType.name,
                 source = MediaSource.EXPORTED.name,
                 moodTag = "Feel good",
@@ -376,23 +378,58 @@ class EchoRepository(
     }
 
     suspend fun createPlaylist(name: String, initialTrackId: String? = null): Long {
-        val id = dao.insertPlaylist(
-            PlaylistEntity(
-                name = name.trim().ifEmpty { "New Playlist" },
-                coverResId = R.drawable.img_cover_aurora_1794995218098
+        return createPlaylistWithTracks(name, listOfNotNull(initialTrackId))
+    }
+
+    suspend fun createPlaylistWithTracks(name: String, orderedTrackIds: List<String>): Long =
+        withContext(Dispatchers.IO) {
+            val id = dao.insertPlaylist(
+                PlaylistEntity(
+                    name = name.trim().ifEmpty { "New Playlist" },
+                    coverResId = R.drawable.img_cover_aurora_1794995218098
+                )
             )
-        )
-        if (initialTrackId != null) {
-            dao.addTrackToPlaylist(PlaylistTrackCrossRef(id, initialTrackId))
+            val baseTime = System.currentTimeMillis()
+            val refs = orderedTrackIds.distinct().mapIndexed { index, trackId ->
+                PlaylistTrackCrossRef(
+                    playlistId = id,
+                    trackId = trackId,
+                    addedAt = baseTime + index.toLong()
+                )
+            }
+            if (refs.isNotEmpty()) {
+                dao.insertPlaylistTrackRefs(refs)
+            }
+            id
         }
-        return id
+
+    suspend fun updatePlaylist(
+        playlistId: Long,
+        newName: String,
+        orderedTrackIds: List<String>
+    ) = withContext(Dispatchers.IO) {
+        dao.renamePlaylist(playlistId, newName.trim().ifEmpty { "Untitled Playlist" })
+        val baseTime = System.currentTimeMillis()
+        val refs = orderedTrackIds.distinct().mapIndexed { index, trackId ->
+            PlaylistTrackCrossRef(
+                playlistId = playlistId,
+                trackId = trackId,
+                addedAt = baseTime + index.toLong()
+            )
+        }
+        dao.replacePlaylistTracks(playlistId, refs)
     }
 
     suspend fun addTrackToPlaylist(playlistId: Long, trackId: String) {
         dao.addTrackToPlaylist(PlaylistTrackCrossRef(playlistId, trackId))
     }
 
-    suspend fun deletePlaylist(playlistId: Long) {
+    suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: String) {
+        dao.removeTrackFromPlaylist(playlistId, trackId)
+    }
+
+    suspend fun deletePlaylist(playlistId: Long) = withContext(Dispatchers.IO) {
+        dao.deletePlaylistTrackRefs(playlistId)
         dao.deletePlaylist(playlistId)
     }
 
@@ -413,6 +450,14 @@ class EchoRepository(
                 createdAt = job.createdAt
             )
         )
+    }
+
+    suspend fun deleteConversionJob(jobId: String) {
+        dao.deleteConversionJob(jobId)
+    }
+
+    suspend fun clearFinishedConversionJobs() {
+        dao.deleteFinishedConversionJobs()
     }
 
     suspend fun clearConversionHistory() {

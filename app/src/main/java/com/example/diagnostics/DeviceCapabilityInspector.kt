@@ -96,6 +96,12 @@ data class DeviceDiagnosticsReport(
         }
         appendLine("  Media3 dav1d extension: ${if (media3Av1ExtensionAvailable) "Active" else "Inactive"}")
         appendLine()
+        appendLine("Audio decoding:")
+        audioCodecs.forEach { codec ->
+            val driver = codec.primaryDecoderName?.let { " ($it)" }.orEmpty()
+            appendLine("  ${codec.shortBadge} [${codec.mimeType}]: ${codec.decodeSupport.label}$driver")
+        }
+        appendLine()
         appendLine("App:")
         appendLine("  Version: $appVersionLabel")
         appendLine("  Build type: $appBuildType")
@@ -118,6 +124,7 @@ object DeviceCapabilityInspector {
         TargetCodecSpec("VP9", "VP9", "video/x-vnd.on2.vp9", isAudio = false),
         TargetCodecSpec("HEVC / H.265", "HEVC", "video/hevc", isAudio = false),
         TargetCodecSpec("H.264 / AVC", "H.264", "video/avc", isAudio = false),
+        TargetCodecSpec("AOMedia IAMF", "IAMF", "audio/iamf", isAudio = true),
         TargetCodecSpec("Opus", "OPUS", "audio/opus", isAudio = true)
     )
 
@@ -135,12 +142,26 @@ object DeviceCapabilityInspector {
         }
     }
 
+    fun isMedia3IamfDecoderPresent(): Boolean {
+        val candidates = listOf(
+            "androidx.media3.decoder.iamf.IamfAudioRenderer",
+            "androidx.media3.decoder.iamf.IamfLibrary"
+        )
+        return candidates.any { className ->
+            runCatching {
+                Class.forName(className)
+                true
+            }.getOrDefault(false)
+        }
+    }
+
     fun inspect(context: Context): DeviceDiagnosticsReport {
         val allCodecs = runCatching {
             MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.toList()
         }.getOrDefault(emptyList())
 
         val media3Av1Present = isMedia3Av1DecoderPresent()
+        val media3IamfPresent = isMedia3IamfDecoderPresent()
 
         val codecReports = inspectedCodecs.map { spec ->
             val matchingDecoders = allCodecs.filter { info ->
@@ -159,6 +180,7 @@ object DeviceCapabilityInspector {
                 hwDecoder != null -> CodecSupportLevel.HARDWARE
                 swDecoder != null -> CodecSupportLevel.SOFTWARE_ONLY
                 spec.mimeType == "video/av01" && media3Av1Present -> CodecSupportLevel.SOFTWARE_ONLY
+                spec.mimeType == "audio/iamf" && media3IamfPresent -> CodecSupportLevel.SOFTWARE_ONLY
                 else -> CodecSupportLevel.UNAVAILABLE
             }
 
@@ -179,19 +201,28 @@ object DeviceCapabilityInspector {
 
             val primaryDecoder = hwDecoder?.name
                 ?: swDecoder?.name
-                ?: if (spec.mimeType == "video/av01" && media3Av1Present) "NextLib / Media3 dav1d (SW)" else null
+                ?: when {
+                    spec.mimeType == "video/av01" && media3Av1Present -> "NextLib / Media3 dav1d (SW)"
+                    spec.mimeType == "audio/iamf" && media3IamfPresent -> "Media3 IamfAudioRenderer (SW)"
+                    else -> null
+                }
 
             val swNames = buildList {
                 addAll(swDecoders.map { it.name }.distinct())
                 if (spec.mimeType == "video/av01" && media3Av1Present) {
                     add("NextLib FFmpeg / dav1d (Media3)")
                 }
+                if (spec.mimeType == "audio/iamf" && media3IamfPresent) {
+                    add("Media3 IamfAudioRenderer")
+                }
             }
 
-            val extNote = if (spec.mimeType == "video/av01" && decodeLevel != CodecSupportLevel.HARDWARE && media3Av1Present) {
-                "Accelerated via Media3 NextLib / dav1d software extension"
-            } else {
-                null
+            val extNote = when {
+                spec.mimeType == "video/av01" && decodeLevel != CodecSupportLevel.HARDWARE && media3Av1Present ->
+                    "Accelerated via Media3 NextLib / dav1d software extension"
+                spec.mimeType == "audio/iamf" && decodeLevel != CodecSupportLevel.HARDWARE && media3IamfPresent ->
+                    "Decoded via Media3 IamfAudioRenderer software extension"
+                else -> null
             }
 
             CodecCapability(

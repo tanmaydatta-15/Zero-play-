@@ -33,8 +33,10 @@ import com.example.data.local.VideoCodecPreference
 import com.example.data.model.ArtistChartItem
 import com.example.data.model.AudioTargetFormat
 import com.example.data.model.ConversionJobUi
+import com.example.data.model.ConversionType
 import com.example.data.model.DownloadFormatPreset
 import com.example.data.model.DownloadTaskUi
+import com.example.data.model.JobStatus
 import com.example.data.model.LibraryQuickCategory
 import com.example.data.model.LibrarySortOption
 import com.example.data.model.MediaTrack
@@ -115,6 +117,8 @@ data class EchoAppUiState(
     val inspectedVideoMetrics: VideoFileMetrics? = null,
     val trackForPlaylistDialog: MediaTrack? = null,
     val showCreatePlaylistDialog: Boolean = false,
+    val showPlaylistEditorSheet: Boolean = false,
+    val editingPlaylist: PlaylistUi? = null,
     val activeTopSheet: EchoTopSheetType? = null,
     val statusBannerMessage: String? = null,
     val ytDlpVersionLabel: String = "NewPipe + yt-dlp • FFmpegKit full-gpl",
@@ -1201,6 +1205,77 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun retryFailedConversions() {
+        val failed = conversionJobs.value.filter { it.status == JobStatus.FAILED }
+        if (failed.isEmpty()) {
+            showStatus("No failed conversion jobs to retry")
+            return
+        }
+        val s = settings.value
+        showStatus("Retrying ${failed.size} failed conversion job(s)...")
+        viewModelScope.launch {
+            failed.forEach { job ->
+                val uriStr = job.inputUriString ?: return@forEach
+                val uri = Uri.parse(uriStr)
+                repository.deleteConversionJob(job.id)
+                when (job.type) {
+                    ConversionType.PHOTO_COMPRESS -> {
+                        val fmt = PhotoTargetFormat.entries.firstOrNull {
+                            job.title.contains(it.label, ignoreCase = true) ||
+                                job.detailLabel.contains(it.label, ignoreCase = true)
+                        } ?: s.defaultPhotoFormat
+                        converterEngine.batchCompressPhotos(
+                            uris = listOf(uri),
+                            format = fmt,
+                            quality = s.defaultPhotoQuality,
+                            scalePercent = s.defaultPhotoScalePercent,
+                            skipIfNotSmaller = s.skipSmallCompressionSavings,
+                            filenamePrefix = s.photoOutputPrefix.prefix
+                        )
+                    }
+                    ConversionType.VIDEO_COMPRESS -> {
+                        val codec = VideoCodecOption.entries.firstOrNull {
+                            job.detailLabel.contains(it.shortBadge, ignoreCase = true)
+                        } ?: s.defaultVideoCodec
+                        val container = VideoContainerOption.entries.firstOrNull {
+                            job.detailLabel.contains(it.ext, ignoreCase = true)
+                        } ?: s.defaultVideoContainer
+                        converterEngine.compressVideo(
+                            uri = uri,
+                            preset = s.defaultVideoPreset,
+                            codec = codec,
+                            container = container,
+                            bitrateMbps = s.defaultVideoBitrateMbps,
+                            skipIfNotSmaller = s.skipSmallCompressionSavings,
+                            removeAudio = s.stripVideoAudioByDefault,
+                            remuxOnly = job.detailLabel.contains("Remux", ignoreCase = true)
+                        )
+                    }
+                    ConversionType.AUDIO_EXTRACT -> {
+                        val fmt = AudioTargetFormat.entries.firstOrNull {
+                            job.title.endsWith("-> ${it.ext.uppercase()}", ignoreCase = true) ||
+                                job.detailLabel.contains(it.ext, ignoreCase = true)
+                        } ?: AudioTargetFormat.OPUS
+                        val rawTitle = job.title.substringBefore(" -> ").takeIf { it.isNotBlank() }
+                        converterEngine.extractAudioFromVideo(
+                            uri = uri,
+                            customTitle = rawTitle,
+                            targetFormat = fmt,
+                            mp3Bitrate = s.mp3Bitrate
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearFinishedConversions() {
+        viewModelScope.launch {
+            repository.clearFinishedConversionJobs()
+            showStatus("Cleared finished conversion jobs")
+        }
+    }
+
     fun openPlaylistPickerForTrack(track: MediaTrack) {
         _uiState.update { it.copy(trackForPlaylistDialog = track) }
     }
@@ -1215,6 +1290,65 @@ class EchoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissCreatePlaylistDialog() {
         _uiState.update { it.copy(showCreatePlaylistDialog = false) }
+    }
+
+    fun openCreatePlaylistEditor() {
+        _uiState.update { it.copy(showPlaylistEditorSheet = true, editingPlaylist = null) }
+    }
+
+    fun openEditPlaylistEditor(playlist: PlaylistUi) {
+        _uiState.update { it.copy(showPlaylistEditorSheet = true, editingPlaylist = playlist) }
+    }
+
+    fun dismissPlaylistEditor() {
+        _uiState.update { it.copy(showPlaylistEditorSheet = false, editingPlaylist = null) }
+    }
+
+    fun savePlaylistEditor(playlistId: Long?, name: String, orderedTrackIds: List<String>) {
+        val cleanName = name.trim().ifEmpty { "My Playlist" }
+        viewModelScope.launch {
+            if (playlistId == null) {
+                val createdId = repository.createPlaylistWithTracks(cleanName, orderedTrackIds)
+                _uiState.update {
+                    it.copy(
+                        showPlaylistEditorSheet = false,
+                        editingPlaylist = null,
+                        selectedPlaylistId = createdId
+                    )
+                }
+                showStatus("Created playlist \"$cleanName\" (${orderedTrackIds.size} items)")
+            } else {
+                repository.updatePlaylist(playlistId, cleanName, orderedTrackIds)
+                _uiState.update {
+                    it.copy(
+                        showPlaylistEditorSheet = false,
+                        editingPlaylist = null
+                    )
+                }
+                showStatus("Saved changes to \"$cleanName\"")
+            }
+        }
+    }
+
+    fun removeTrackFromPlaylist(playlistId: Long, track: MediaTrack) {
+        viewModelScope.launch {
+            repository.removeTrackFromPlaylist(playlistId, track.id)
+            showStatus("Removed \"${track.title}\" from playlist")
+        }
+    }
+
+    fun deletePlaylist(playlist: PlaylistUi) {
+        viewModelScope.launch {
+            repository.deletePlaylist(playlist.id)
+            _uiState.update { state ->
+                state.copy(
+                    showPlaylistEditorSheet = false,
+                    editingPlaylist = null,
+                    selectedPlaylistId = if (state.selectedPlaylistId == playlist.id) null else state.selectedPlaylistId
+                )
+            }
+            showStatus("Deleted playlist \"${playlist.name}\"")
+        }
     }
 
     fun createPlaylist(name: String, initialTrackId: String? = null) {

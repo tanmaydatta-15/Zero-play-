@@ -105,6 +105,7 @@ import com.example.ui.sheets.CreatePlaylistDialog
 import com.example.ui.sheets.EchoTopActionSheet
 import com.example.ui.sheets.MediaDownloaderSheet
 import com.example.ui.sheets.PhotoConverterSheet
+import com.example.ui.sheets.PlaylistEditorSheet
 import com.example.ui.sheets.SongInfoBottomSheet
 import com.example.ui.sheets.VideoCompressorSheet
 import kotlinx.coroutines.launch
@@ -424,6 +425,7 @@ fun EchoMusicApp(
                                 onSearchQueryChange = viewModel::updateSearchQuery,
                                 onOpenDownloaderSheet = viewModel::openDownloadSheet,
                                 onOpenCodecDiagnostics = { viewModel.openDeviceInfo(true) },
+                                onLogoClick = { viewModel.openAbout(true) },
                                 onOpenDrawer = openDrawer,
                                 onPlayTrack = viewModel::playTrack,
                                 onPlayNext = viewModel::playNextInQueue,
@@ -451,6 +453,8 @@ fun EchoMusicApp(
                                 onOpenCodecDiagnostics = { viewModel.openDeviceInfo(true) },
                                 onRetryDownload = viewModel::retryDownload,
                                 onDismissDownload = viewModel::dismissDownload,
+                                onRetryFailedConversions = viewModel::retryFailedConversions,
+                                onClearFinishedConversions = viewModel::clearFinishedConversions,
                                 onTopBarAction = viewModel::openTopSheet,
                                 onLogoClick = { viewModel.openAbout(true) },
                                 onOpenDrawer = openDrawer,
@@ -472,7 +476,10 @@ fun EchoMusicApp(
                                 onToggleSortDirection = viewModel::toggleSortDirection,
                                 onOpenQuickCategory = viewModel::openQuickCategory,
                                 onOpenPlaylist = viewModel::openPlaylist,
-                                onCreatePlaylistClick = viewModel::openCreatePlaylistDialog,
+                                onCreatePlaylistClick = viewModel::openCreatePlaylistEditor,
+                                onEditPlaylist = viewModel::openEditPlaylistEditor,
+                                onDeletePlaylist = viewModel::deletePlaylist,
+                                onRemoveTrackFromPlaylist = viewModel::removeTrackFromPlaylist,
                                 onRescanMedia = viewModel::rescanMediaStore,
                                 onTopBarAction = viewModel::openTopSheet,
                                 onLogoClick = { viewModel.openAbout(true) },
@@ -780,6 +787,19 @@ fun EchoMusicApp(
             CreatePlaylistDialog(
                 onDismiss = viewModel::dismissCreatePlaylistDialog,
                 onCreate = { name -> viewModel.createPlaylist(name) }
+            )
+        }
+
+        if (uiState.showPlaylistEditorSheet) {
+            val liveEditingPlaylist = uiState.editingPlaylist?.let { edit ->
+                playlists.find { it.id == edit.id } ?: edit
+            }
+            PlaylistEditorSheet(
+                editingPlaylist = liveEditingPlaylist,
+                allTracks = tracks,
+                onSave = viewModel::savePlaylistEditor,
+                onDelete = viewModel::deletePlaylist,
+                onDismiss = viewModel::dismissPlaylistEditor
             )
         }
 

@@ -153,9 +153,9 @@ fun EchoTopBar(
         }
         Box(
             modifier = Modifier
-                .size(34.dp)
+                .size(32.dp)
                 .clip(CircleShape)
-                .background(Color(0xFF131315))
+                .background(Color(0xFFF0F4FF))
                 .clickable(onClick = onLogoClick)
                 .testTag("topbar_zero_play_logo"),
             contentAlignment = Alignment.Center

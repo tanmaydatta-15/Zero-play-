@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -86,6 +87,9 @@ interface EchoDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlaylist(playlist: PlaylistEntity): Long
 
+    @Query("UPDATE playlists SET name = :newName WHERE id = :playlistId")
+    suspend fun renamePlaylist(playlistId: Long, newName: String)
+
     @Query("DELETE FROM playlists WHERE id = :playlistId")
     suspend fun deletePlaylist(playlistId: Long)
 
@@ -95,14 +99,34 @@ interface EchoDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addTrackToPlaylist(ref: PlaylistTrackCrossRef)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaylistTrackRefs(refs: List<PlaylistTrackCrossRef>)
+
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND trackId = :trackId")
     suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: String)
+
+    @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId")
+    suspend fun deletePlaylistTrackRefs(playlistId: Long)
+
+    @Transaction
+    suspend fun replacePlaylistTracks(playlistId: Long, refs: List<PlaylistTrackCrossRef>) {
+        deletePlaylistTrackRefs(playlistId)
+        if (refs.isNotEmpty()) {
+            insertPlaylistTrackRefs(refs)
+        }
+    }
 
     @Query("SELECT * FROM conversion_jobs ORDER BY createdAt DESC")
     fun observeConversionJobs(): Flow<List<ConversionJobEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertConversionJob(job: ConversionJobEntity)
+
+    @Query("DELETE FROM conversion_jobs WHERE id = :jobId")
+    suspend fun deleteConversionJob(jobId: String)
+
+    @Query("DELETE FROM conversion_jobs WHERE status IN ('COMPLETED', 'FAILED')")
+    suspend fun deleteFinishedConversionJobs()
 
     @Query("DELETE FROM conversion_jobs")
     suspend fun clearConversionJobs()

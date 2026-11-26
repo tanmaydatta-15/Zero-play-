@@ -92,6 +92,7 @@ object FfmpegKitEngine {
             c.contains("hevc") || c.contains("h265") || c.contains("hvc1") || c.contains("hev1") -> "HEVC"
             c.contains("vp9") || c.contains("vp09") -> "VP9"
             c.contains("h264") || c.contains("avc") -> "H.264"
+            c.contains("iamf") -> "IAMF"
             c.contains("opus") -> "OPUS"
             c.contains("mp3") || c.contains("lame") -> "MP3"
             c.contains("flac") -> "FLAC"
@@ -389,9 +390,50 @@ object FfmpegKitEngine {
             "-vn"
         )
 
+        val opusKbps = (mp3Bitrate.kbps ?: 192).coerceIn(96, 320)
         when (targetFormat) {
+            AudioTargetFormat.IAMF -> {
+                // Package Opus audio in AOMedia IAMF container (FFmpeg 7+/8+ iamf muxer)
+                val iamfArgs = args.toMutableList().apply {
+                    addAll(
+                        listOf(
+                            "-stream_group", "type=iamf_audio_element:id=1:st=0:audio_element_type=channel",
+                            "-stream_group", "type=iamf_mix_presentation:id=2:stg=0:annotations=en-us=ZeroPlay",
+                            "-map", "0:a:0",
+                            "-c:a", "libopus",
+                            "-b:a", "${opusKbps}k",
+                            "-vbr", "on",
+                            "-f", "iamf"
+                        )
+                    )
+                    if (!title.isNullOrBlank()) addAll(listOf("-metadata", "title=$title"))
+                    if (!artist.isNullOrBlank()) addAll(listOf("-metadata", "artist=$artist"))
+                    add(outputFile.absolutePath)
+                }
+                val primary = executeCommand(taskId, iamfArgs, expectedDurationMs, onProgress, outputFile)
+                if (primary.isSuccess) return@withContext primary
+
+                // Fallback: simpler IAMF mux invocation without explicit stream_group syntax
+                val simpleIamfArgs = args.toMutableList().apply {
+                    addAll(listOf("-c:a", "libopus", "-b:a", "${opusKbps}k", "-vbr", "on", "-f", "iamf"))
+                    if (!title.isNullOrBlank()) addAll(listOf("-metadata", "title=$title"))
+                    if (!artist.isNullOrBlank()) addAll(listOf("-metadata", "artist=$artist"))
+                    add(outputFile.absolutePath)
+                }
+                val secondary = executeCommand(taskId, simpleIamfArgs, expectedDurationMs, onProgress, outputFile)
+                if (secondary.isSuccess) return@withContext secondary
+
+                // Fallback if device FFmpeg binary omits iamf muxer: encode high-efficiency Ogg/Opus payload
+                val opusFallbackArgs = args.toMutableList().apply {
+                    addAll(listOf("-c:a", "libopus", "-b:a", "${opusKbps}k", "-vbr", "on", "-f", "opus"))
+                    if (!title.isNullOrBlank()) addAll(listOf("-metadata", "title=$title"))
+                    if (!artist.isNullOrBlank()) addAll(listOf("-metadata", "artist=$artist"))
+                    add(outputFile.absolutePath)
+                }
+                return@withContext executeCommand(taskId, opusFallbackArgs, expectedDurationMs, onProgress, outputFile)
+            }
             AudioTargetFormat.OPUS -> {
-                args += listOf("-c:a", "libopus", "-b:a", "160k", "-vbr", "on")
+                args += listOf("-c:a", "libopus", "-b:a", "${opusKbps}k", "-vbr", "on")
             }
             AudioTargetFormat.MP3 -> {
                 args += listOf("-c:a", "libmp3lame")

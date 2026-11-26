@@ -50,7 +50,9 @@ import kotlin.math.roundToInt
 enum class PhotoTargetFormat(val label: String, val mimeType: String, val ext: String) {
     JPEG("JPEG", "image/jpeg", "jpg"),
     PNG("PNG", "image/png", "png"),
-    WEBP("WEBP", "image/webp", "webp")
+    WEBP("WebP", "image/webp", "webp"),
+    AVIF("AVIF", "image/avif", "avif"),
+    JXL("JXL", "image/jxl", "jxl")
 }
 
 enum class VideoCompressionPreset(val label: String, val heightPx: Int, val bitrateBps: Int) {
@@ -123,7 +125,7 @@ class MediaConverterEngine(
             runCatching {
                 val inputBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: error("Unable to open image stream")
-                val original = BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size)
+                val original = NextGenImageCodec.decodeImage(inputBytes)
                     ?: error("Unsupported image format")
 
                 val targetW = ((original.width * scalePercent) / 100f).roundToInt().coerceAtLeast(64)
@@ -134,19 +136,27 @@ class MediaConverterEngine(
                     original
                 }
 
-                val outStream = ByteArrayOutputStream()
-                val compressFormat = when (format) {
-                    PhotoTargetFormat.JPEG -> Bitmap.CompressFormat.JPEG
-                    PhotoTargetFormat.PNG -> Bitmap.CompressFormat.PNG
-                    PhotoTargetFormat.WEBP -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        Bitmap.CompressFormat.WEBP_LOSSY
-                    } else {
-                        @Suppress("DEPRECATION")
-                        Bitmap.CompressFormat.WEBP
+                val clampedQuality = quality.coerceIn(10, 100)
+                val compressedBytes: ByteArray = when (format) {
+                    PhotoTargetFormat.AVIF -> NextGenImageCodec.encodeAvif(scaled, clampedQuality)
+                    PhotoTargetFormat.JXL -> NextGenImageCodec.encodeJxl(scaled, clampedQuality)
+                    PhotoTargetFormat.JPEG, PhotoTargetFormat.PNG, PhotoTargetFormat.WEBP -> {
+                        val outStream = ByteArrayOutputStream()
+                        val compressFormat = when (format) {
+                            PhotoTargetFormat.JPEG -> Bitmap.CompressFormat.JPEG
+                            PhotoTargetFormat.PNG -> Bitmap.CompressFormat.PNG
+                            PhotoTargetFormat.WEBP -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                Bitmap.CompressFormat.WEBP_LOSSY
+                            } else {
+                                @Suppress("DEPRECATION")
+                                Bitmap.CompressFormat.WEBP
+                            }
+                            else -> Bitmap.CompressFormat.JPEG
+                        }
+                        scaled.compress(compressFormat, clampedQuality, outStream)
+                        outStream.toByteArray()
                     }
                 }
-                scaled.compress(compressFormat, quality.coerceIn(10, 100), outStream)
-                val compressedBytes = outStream.toByteArray()
                 if (scaled !== original) scaled.recycle()
                 original.recycle()
 
@@ -166,6 +176,17 @@ class MediaConverterEngine(
 
                 val outName = "${filenamePrefix}${name.substringBeforeLast('.')}_${System.currentTimeMillis()}.${format.ext}"
                 val savedUri = saveBytesToMediaStoreImages(outName, format.mimeType, compressedBytes)
+
+                repository.registerExportedMedia(
+                    trackId = "exp_img_${System.currentTimeMillis()}_${index}",
+                    title = outName.substringBeforeLast('.'),
+                    artist = "Exported Photo • ${format.label}",
+                    uriString = savedUri.toString(),
+                    mediaType = MediaType.AUDIO,
+                    mimeType = format.mimeType,
+                    sizeBytes = sizeAfter,
+                    artworkUriString = savedUri.toString()
+                )
 
                 repository.upsertConversionJob(
                     baseJob.copy(
@@ -377,10 +398,11 @@ class MediaConverterEngine(
         val name = customTitle?.takeIf { it.isNotBlank() } ?: queryDisplayName(uri) ?: "ExtractedAudio"
         val metrics = inspectVideoMetrics(uri)
         val sizeBefore = metrics.sizeBytes
-        val detail = if (targetFormat == AudioTargetFormat.MP3) {
-            "MP3 (${mp3Bitrate.label}) via libmp3lame"
-        } else {
-            "${targetFormat.label} via FFmpegKit (${targetFormat.ffmpegCodec})"
+        val detail = when (targetFormat) {
+            AudioTargetFormat.MP3 -> "MP3 (${mp3Bitrate.label}) via libmp3lame"
+            AudioTargetFormat.IAMF -> "IAMF (${mp3Bitrate.kbps ?: 192} kbps Opus) via AOMedia/FFmpegKit"
+            AudioTargetFormat.OPUS -> "Opus (${mp3Bitrate.kbps ?: 192} kbps) via libopus"
+            else -> "${targetFormat.label} via FFmpegKit (${targetFormat.ffmpegCodec})"
         }
         val baseJob = ConversionJobUi(
             id = jobId,
@@ -569,6 +591,7 @@ class MediaConverterEngine(
     }
 
     private fun saveBytesToMediaStoreImages(filename: String, mimeType: String, bytes: ByteArray): Uri {
+        val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, filename)
             put(MediaStore.Images.Media.MIME_TYPE, mimeType)
@@ -577,16 +600,49 @@ class MediaConverterEngine(
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
         }
-        val resolver = context.contentResolver
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("Failed to create MediaStore image entry")
-        resolver.openOutputStream(uri)?.use { it.write(bytes) }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
+        val imageUri = runCatching { resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) }.getOrNull()
+        if (imageUri != null) {
+            val wrote = runCatching {
+                resolver.openOutputStream(imageUri)?.use { it.write(bytes) }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    resolver.update(imageUri, values, null, null)
+                }
+            }
+            if (wrote.isSuccess) return imageUri
         }
-        return uri
+
+        // Fallback for next-gen formats (e.g., image/jxl or image/avif on older Android MediaStore)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val fileValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ZeroPlay")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val filesUri = runCatching {
+                resolver.insert(MediaStore.Files.getContentUri("external"), fileValues)
+            }.getOrNull()
+            if (filesUri != null) {
+                val wrote = runCatching {
+                    resolver.openOutputStream(filesUri)?.use { it.write(bytes) }
+                    fileValues.clear()
+                    fileValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(filesUri, fileValues, null, null)
+                }
+                if (wrote.isSuccess) return filesUri
+            }
+        }
+
+        val outDir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir,
+            "ZeroPlay"
+        ).apply { mkdirs() }
+        val outFile = File(outDir, filename)
+        FileOutputStream(outFile).use { it.write(bytes) }
+        MediaScannerConnection.scanFile(context, arrayOf(outFile.absolutePath), arrayOf(mimeType), null)
+        return Uri.fromFile(outFile)
     }
 
     private fun saveFileToMediaStoreVideo(filename: String, mimeType: String, source: File): Uri {
@@ -639,6 +695,26 @@ class MediaConverterEngine(
                     values.put(MediaStore.Audio.Media.IS_PENDING, 0)
                     resolver.update(inserted, values, null, null)
                 }.onSuccess { return inserted }
+            }
+            // Fallback to MediaStore.Files for audio/iamf on Android versions without built-in IAMF MIME mapping
+            val fileValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/ZeroPlay")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val filesInserted = runCatching {
+                resolver.insert(MediaStore.Files.getContentUri("external"), fileValues)
+            }.getOrNull()
+            if (filesInserted != null) {
+                runCatching {
+                    resolver.openOutputStream(filesInserted)?.use { out ->
+                        FileInputStream(source).use { input -> input.copyTo(out) }
+                    }
+                    fileValues.clear()
+                    fileValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(filesInserted, fileValues, null, null)
+                }.onSuccess { return filesInserted }
             }
         }
         val outDir = File(

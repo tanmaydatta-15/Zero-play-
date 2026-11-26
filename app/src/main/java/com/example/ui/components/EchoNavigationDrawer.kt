@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -86,14 +87,20 @@ fun EchoNavigationDrawerSheet(
                     .padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_zero_play_logo),
-                    contentDescription = "Zero Play",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(CircleShape)
-                )
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFFF0F4FF),
+                    modifier = Modifier.size(46.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_zero_play_logo),
+                        contentDescription = "Zero Play",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(CircleShape)
+                    )
+                }
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
                     Text(

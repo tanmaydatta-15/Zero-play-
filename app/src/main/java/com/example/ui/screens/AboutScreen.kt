@@ -213,9 +213,9 @@ fun AboutScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(84.dp)
+                                    .size(88.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF131315)),
+                                    .background(Color(0xFFF0F4FF)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Image(

@@ -1148,7 +1148,7 @@ fun PhotoConverterSheet(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Batch resize, compress & convert between JPEG, PNG, and WebP",
+                text = "Batch resize, compress & convert between JPEG, PNG, WebP, AVIF, and JXL",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1172,23 +1172,26 @@ fun PhotoConverterSheet(
             Spacer(modifier = Modifier.height(12.dp))
             Text("Quick Presets", style = MaterialTheme.typography.labelLarge)
             Spacer(modifier = Modifier.height(6.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 FilterChip(
                     selected = quality.roundToInt() == 75 && scalePercent.roundToInt() == 75,
-                    onClick = { quality = 75f; scalePercent = 75f; format = PhotoTargetFormat.WEBP },
-                    label = { Text("Social 75%") },
+                    onClick = { quality = 75f; scalePercent = 75f; format = PhotoTargetFormat.AVIF },
+                    label = { Text("Social AVIF 75%") },
                     shape = CircleShape
                 )
                 FilterChip(
                     selected = quality.roundToInt() == 85 && scalePercent.roundToInt() == 100,
-                    onClick = { quality = 85f; scalePercent = 100f; format = PhotoTargetFormat.JPEG },
+                    onClick = { quality = 85f; scalePercent = 100f; format = PhotoTargetFormat.WEBP },
                     label = { Text("Balanced 85%") },
                     shape = CircleShape
                 )
                 FilterChip(
                     selected = quality.roundToInt() == 95 && scalePercent.roundToInt() == 100,
-                    onClick = { quality = 95f; scalePercent = 100f; format = PhotoTargetFormat.WEBP },
-                    label = { Text("Archival 95%") },
+                    onClick = { quality = 95f; scalePercent = 100f; format = PhotoTargetFormat.JXL },
+                    label = { Text("Archival JXL 95%") },
                     shape = CircleShape
                 )
             }
@@ -1196,13 +1199,17 @@ fun PhotoConverterSheet(
             Spacer(modifier = Modifier.height(10.dp))
             Text("Target Format", style = MaterialTheme.typography.labelLarge)
             Spacer(modifier = Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 PhotoTargetFormat.entries.forEach { fmt ->
                     FilterChip(
                         selected = format == fmt,
                         onClick = { format = fmt },
                         label = { Text(fmt.label) },
-                        shape = CircleShape
+                        shape = CircleShape,
+                        modifier = Modifier.testTag("photo_fmt_${fmt.ext}")
                     )
                 }
             }
@@ -1584,7 +1591,7 @@ fun AudioExtractorSheet(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Extract from video or convert audio into Opus (libopus), MP3 (libmp3lame), M4A, or FLAC",
+                text = "Extract from video or convert audio into IAMF (AOMedia), Opus, MP3, M4A, or FLAC",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1643,10 +1650,18 @@ fun AudioExtractorSheet(
                 }
             }
 
-            AnimatedVisibility(visible = targetFormat == AudioTargetFormat.MP3) {
+            val supportsBitrate = targetFormat == AudioTargetFormat.MP3 ||
+                targetFormat == AudioTargetFormat.IAMF ||
+                targetFormat == AudioTargetFormat.OPUS
+            AnimatedVisibility(visible = supportsBitrate) {
                 Column {
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text("MP3 Bitrate (libmp3lame)", style = MaterialTheme.typography.labelLarge)
+                    val bitrateHeading = when (targetFormat) {
+                        AudioTargetFormat.IAMF -> "IAMF Audio Bitrate (AOMedia Opus)"
+                        AudioTargetFormat.OPUS -> "Opus Bitrate (libopus)"
+                        else -> "MP3 Bitrate (libmp3lame)"
+                    }
+                    Text(bitrateHeading, style = MaterialTheme.typography.labelLarge)
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier

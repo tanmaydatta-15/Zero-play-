@@ -22,6 +22,7 @@ enum class VideoContainerOption(val label: String, val ext: String, val mimeType
 }
 
 enum class AudioTargetFormat(val label: String, val ext: String, val mimeType: String, val ffmpegCodec: String) {
+    IAMF("IAMF (AOMedia)", "iamf", "audio/iamf", "libopus"),
     OPUS("Opus", "opus", "audio/opus", "libopus"),
     MP3("MP3", "mp3", "audio/mpeg", "libmp3lame"),
     M4A("M4A (AAC)", "m4a", "audio/mp4", "aac"),
@@ -91,6 +92,7 @@ data class MediaTrack(
             }
 
             when {
+                lowerMime.contains("iamf") || cleanUri.endsWith(".iamf") || meta.contains("IAMF") -> badges += "IAMF"
                 lowerMime.contains("opus") || cleanUri.endsWith(".opus") || meta.contains("OPUS") -> badges += "OPUS"
                 lowerMime.contains("flac") || cleanUri.endsWith(".flac") || meta.contains("FLAC") -> badges += "FLAC"
                 lowerMime.contains("mpeg") || cleanUri.endsWith(".mp3") || meta.contains("MP3") -> badges += "MP3"
@@ -99,6 +101,9 @@ data class MediaTrack(
                 cleanUri.endsWith(".m4a") || meta.contains("M4A") || lowerMime == "audio/mp4" -> badges += "M4A"
                 lowerMime.contains("video/mp4") || cleanUri.endsWith(".mp4") || meta.contains("MP4") -> badges += "MP4"
                 lowerMime.contains("wav") || cleanUri.endsWith(".wav") -> badges += "WAV"
+                lowerMime.contains("avif") || cleanUri.endsWith(".avif") || meta.contains("AVIF") -> badges += "AVIF"
+                lowerMime.contains("jxl") || cleanUri.endsWith(".jxl") || meta.contains("JXL") -> badges += "JXL"
+                lowerMime.contains("webp") || cleanUri.endsWith(".webp") -> badges += "WEBP"
             }
             return badges.take(2)
         }

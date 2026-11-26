@@ -35,14 +35,21 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Outbox
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -51,6 +58,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -102,6 +110,9 @@ fun LibraryScreen(
     onOpenQuickCategory: (LibraryQuickCategory?) -> Unit,
     onOpenPlaylist: (Long?) -> Unit,
     onCreatePlaylistClick: () -> Unit,
+    onEditPlaylist: (PlaylistUi) -> Unit = {},
+    onDeletePlaylist: (PlaylistUi) -> Unit = {},
+    onRemoveTrackFromPlaylist: (Long, MediaTrack) -> Unit = { _, _ -> },
     onRescanMedia: () -> Unit,
     onTopBarAction: (EchoTopSheetType) -> Unit,
     onLogoClick: () -> Unit = {},
@@ -202,10 +213,11 @@ fun LibraryScreen(
     if (selectedPlaylistId != null) {
         val playlist = playlists.find { it.id == selectedPlaylistId }
         if (playlist != null) {
+            var confirmDelete by rememberSaveable(playlist.id) { mutableStateOf(false) }
             BackHandler { onOpenPlaylist(null) }
             LibraryDetailList(
                 title = playlist.name,
-                tracks = sortTracks(playlist.tracks, sortOption, sortAscending),
+                tracks = playlist.tracks,
                 currentTrackId = currentTrackId,
                 onBack = { onOpenPlaylist(null) },
                 onPlayTrack = onPlayTrack,
@@ -214,8 +226,73 @@ fun LibraryScreen(
                 onToggleLike = onToggleLike,
                 onConvertOrExtract = onConvertOrExtract,
                 onShowSongInfo = onShowSongInfo,
+                onRemoveTrack = { track -> onRemoveTrackFromPlaylist(playlist.id, track) },
+                emptyActionLabel = "Add Audio or Videos",
+                onEmptyAction = { onEditPlaylist(playlist) },
+                trailingHeaderAction = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (playlist.tracks.isNotEmpty()) {
+                            IconButton(
+                                onClick = { onPlayTrack(playlist.tracks.first(), playlist.tracks) },
+                                modifier = Modifier.testTag("playlist_detail_play_all_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = "Play playlist",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { onEditPlaylist(playlist) },
+                            modifier = Modifier.testTag("playlist_detail_edit_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Edit,
+                                contentDescription = "Edit playlist",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(
+                            onClick = { confirmDelete = true },
+                            modifier = Modifier.testTag("playlist_detail_delete_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.DeleteOutline,
+                                contentDescription = "Delete playlist",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
                 modifier = modifier
             )
+            if (confirmDelete) {
+                AlertDialog(
+                    onDismissRequest = { confirmDelete = false },
+                    title = { Text("Delete \"${playlist.name}\"?") },
+                    text = { Text("This deletes the custom playlist from Room storage while keeping your media files intact.") },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                confirmDelete = false
+                                onDeletePlaylist(playlist)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            )
+                        ) {
+                            Text("Delete")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmDelete = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
             return
         }
     }
@@ -867,8 +944,15 @@ private fun PlaylistSquareCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        val videoCount = playlist.tracks.count { it.mediaType == com.example.data.model.MediaType.VIDEO }
+        val audioCount = playlist.tracks.size - videoCount
+        val countLabel = when {
+            videoCount > 0 && audioCount > 0 -> "$audioCount audio • $videoCount video"
+            videoCount > 0 -> "$videoCount ${if (videoCount == 1) "video" else "videos"}"
+            else -> "$audioCount ${if (audioCount == 1) "track" else "tracks"}"
+        }
         Text(
-            text = "${playlist.tracks.size} songs",
+            text = countLabel,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1
@@ -888,6 +972,9 @@ private fun LibraryDetailList(
     onToggleLike: (MediaTrack) -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
     onShowSongInfo: (MediaTrack) -> Unit = {},
+    onRemoveTrack: ((MediaTrack) -> Unit)? = null,
+    emptyActionLabel: String = "Scan MediaStore",
+    onEmptyAction: (() -> Unit)? = null,
     trailingHeaderAction: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -913,7 +1000,9 @@ private fun LibraryDetailList(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 trailingHeaderAction?.invoke()
             }
@@ -921,8 +1010,9 @@ private fun LibraryDetailList(
         item {
             if (tracks.isEmpty()) {
                 EmptyLibraryNotice(
-                    message = "No tracks in $title yet.",
-                    onAction = null
+                    message = "No tracks or videos in $title yet.",
+                    actionLabel = emptyActionLabel,
+                    onAction = onEmptyAction
                 )
             } else {
                 GroupedTrackSectionList(
@@ -933,7 +1023,8 @@ private fun LibraryDetailList(
                     onAddToPlaylist = onAddToPlaylist,
                     onToggleLike = onToggleLike,
                     onConvertOrExtract = onConvertOrExtract,
-                    onShowSongInfo = onShowSongInfo
+                    onShowSongInfo = onShowSongInfo,
+                    onRemoveTrack = onRemoveTrack
                 )
             }
         }
@@ -949,7 +1040,8 @@ private fun GroupedTrackSectionList(
     onAddToPlaylist: (MediaTrack) -> Unit,
     onToggleLike: (MediaTrack) -> Unit,
     onConvertOrExtract: (MediaTrack) -> Unit,
-    onShowSongInfo: (MediaTrack) -> Unit = {}
+    onShowSongInfo: (MediaTrack) -> Unit = {},
+    onRemoveTrack: ((MediaTrack) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -958,18 +1050,51 @@ private fun GroupedTrackSectionList(
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         tracks.forEachIndexed { index, track ->
-            GroupedTrackRow(
-                track = track,
-                index = index,
-                totalCount = tracks.size,
-                isActive = track.id == currentTrackId,
-                onClick = { onPlayTrack(track, tracks) },
-                onPlayNext = { onPlayNext(track) },
-                onAddToPlaylist = { onAddToPlaylist(track) },
-                onToggleLike = { onToggleLike(track) },
-                onConvertOrExtract = { onConvertOrExtract(track) },
-                onSongInfo = { onShowSongInfo(track) }
-            )
+            if (onRemoveTrack != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        GroupedTrackRow(
+                            track = track,
+                            index = index,
+                            totalCount = tracks.size,
+                            isActive = track.id == currentTrackId,
+                            onClick = { onPlayTrack(track, tracks) },
+                            onPlayNext = { onPlayNext(track) },
+                            onAddToPlaylist = { onAddToPlaylist(track) },
+                            onToggleLike = { onToggleLike(track) },
+                            onConvertOrExtract = { onConvertOrExtract(track) },
+                            onSongInfo = { onShowSongInfo(track) }
+                        )
+                    }
+                    IconButton(
+                        onClick = { onRemoveTrack(track) },
+                        modifier = Modifier.testTag("playlist_remove_track_${track.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Remove from playlist",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            } else {
+                GroupedTrackRow(
+                    track = track,
+                    index = index,
+                    totalCount = tracks.size,
+                    isActive = track.id == currentTrackId,
+                    onClick = { onPlayTrack(track, tracks) },
+                    onPlayNext = { onPlayNext(track) },
+                    onAddToPlaylist = { onAddToPlaylist(track) },
+                    onToggleLike = { onToggleLike(track) },
+                    onConvertOrExtract = { onConvertOrExtract(track) },
+                    onSongInfo = { onShowSongInfo(track) }
+                )
+            }
         }
     }
 }
@@ -977,6 +1102,7 @@ private fun GroupedTrackSectionList(
 @Composable
 private fun EmptyLibraryNotice(
     message: String,
+    actionLabel: String = "Scan MediaStore",
     onAction: (() -> Unit)?
 ) {
     Surface(
@@ -1010,7 +1136,7 @@ private fun EmptyLibraryNotice(
                     modifier = Modifier.clickable(onClick = onAction)
                 ) {
                     Text(
-                        text = "Scan MediaStore",
+                        text = actionLabel,
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)

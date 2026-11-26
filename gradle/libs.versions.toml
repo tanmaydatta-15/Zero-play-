@@ -34,6 +34,8 @@ okhttp = "4.12.0"
 ffmpegKit = "8.1.9"
 workRuntime = "2.10.1"
 desugarJdkLibs = "2.1.5"
+avifCoder = "2.2.0"
+jxlCoder = "2.5.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -79,6 +81,8 @@ youtubedl-ffmpeg = { group = "io.github.junkfood02.youtubedl-android", name = "f
 newpipe-extractor = { group = "com.github.TeamNewPipe", name = "NewPipeExtractor", version.ref = "newpipeExtractor" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 ffmpeg-kit-full-gpl = { group = "dev.ffmpegkit-maintained", name = "ffmpeg-kit-full-gpl", version.ref = "ffmpegKit" }
+avif-coder = { group = "io.github.awxkee", name = "avif-coder", version.ref = "avifCoder" }
+jxl-coder = { group = "io.github.awxkee", name = "jxl-coder", version.ref = "jxlCoder" }
 desugar-jdk-libs-nio = { group = "com.android.tools", name = "desugar_jdk_libs_nio", version.ref = "desugarJdkLibs" }
 
 [plugins]

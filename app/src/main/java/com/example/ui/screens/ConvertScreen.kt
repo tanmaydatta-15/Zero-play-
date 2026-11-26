@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Collections
 import androidx.compose.material.icons.rounded.Compare
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DeveloperBoard
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -35,10 +36,12 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Transform
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -86,6 +89,8 @@ fun ConvertScreen(
     onOpenCodecDiagnostics: () -> Unit = {},
     onRetryDownload: (DownloadTaskUi) -> Unit = {},
     onDismissDownload: (String) -> Unit = {},
+    onRetryFailedConversions: () -> Unit = {},
+    onClearFinishedConversions: () -> Unit = {},
     onTopBarAction: (EchoTopSheetType) -> Unit,
     onLogoClick: () -> Unit = {},
     onOpenDrawer: () -> Unit = {},
@@ -122,7 +127,7 @@ fun ConvertScreen(
                 ) {
                     EchoQuickAccessCard(
                         title = "Photo Compress",
-                        subtitle = "JPEG • PNG • WebP",
+                        subtitle = "JPEG • PNG • WebP • AVIF • JXL",
                         icon = Icons.Rounded.Image,
                         onClick = onOpenPhotoConverter,
                         modifier = Modifier
@@ -145,7 +150,7 @@ fun ConvertScreen(
                 ) {
                     EchoQuickAccessCard(
                         title = "Audio Convert",
-                        subtitle = "Opus • MP3 • FLAC",
+                        subtitle = "IAMF • Opus • MP3 • FLAC",
                         icon = Icons.Rounded.AudioFile,
                         onClick = onOpenAudioExtractor,
                         modifier = Modifier
@@ -164,7 +169,7 @@ fun ConvertScreen(
                 }
                 EchoQuickAccessCard(
                     title = "Hardware Codec Diagnostics",
-                    subtitle = "Query MediaCodecList for AV1 • VP9 • HEVC • H.264",
+                    subtitle = "Query MediaCodecList for AV1 • VP9 • HEVC • IAMF • Opus",
                     icon = Icons.Rounded.DeveloperBoard,
                     onClick = onOpenCodecDiagnostics,
                     modifier = Modifier
@@ -205,15 +210,76 @@ fun ConvertScreen(
             }
         }
 
-        // Conversion Progress & Export History
+        // Conversion Progress & Export History + Queue Controls
         item {
-            Text(
-                text = "CONVERSION PROGRESS & EXPORTED",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
+            val failedCount = conversionJobs.count { it.status == JobStatus.FAILED }
+            val finishedCount = conversionJobs.count {
+                it.status == JobStatus.COMPLETED || it.status == JobStatus.FAILED
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "CONVERSION PROGRESS & EXPORTED",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (failedCount > 0 || finishedCount > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (failedCount > 0) {
+                            FilledTonalButton(
+                                onClick = onRetryFailedConversions,
+                                shape = CircleShape,
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .height(38.dp)
+                                    .testTag("convert_retry_failed_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Retry Failed ($failedCount)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        if (finishedCount > 0) {
+                            OutlinedButton(
+                                onClick = onClearFinishedConversions,
+                                shape = CircleShape,
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .height(38.dp)
+                                    .testTag("convert_clear_finished_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteSweep,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Clear Finished",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         item {

@@ -27,7 +27,7 @@ android {
     abi {
       isEnable = true
       reset()
-      include("arm64-v8a")
+      include("arm64-v8a", "armeabi-v7a")
       isUniversalApk = true
     }
   }
@@ -79,6 +79,9 @@ android {
       useLegacyPackaging = true
       pickFirsts += listOf(
         "**/libc++_shared.so",
+        "**/libffmpeg.so",
+        "**/libffmpegkit.so",
+        "**/libffmpegkit_abidetect.so",
         "**/libavcodec.so",
         "**/libavformat.so",
         "**/libavutil.so",
@@ -138,6 +141,8 @@ dependencies {
   implementation(libs.androidx.media3.common)
   // Keep FFmpegKit full-gpl declared before other native AARs so its 16KB-aligned libc++_shared.so & libav*.so take priority
   implementation(libs.ffmpeg.kit.full.gpl)
+  implementation(libs.avif.coder)
+  implementation(libs.jxl.coder)
   implementation(libs.nextlib.media3ext)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.kotlinx.coroutines.android)

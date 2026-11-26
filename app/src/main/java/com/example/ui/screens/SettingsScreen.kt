@@ -183,7 +183,7 @@ fun SettingsScreen(
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0xFF131315),
+                            color = Color(0xFFF0F4FF),
                             modifier = Modifier.size(54.dp)
                         ) {
                             Image(

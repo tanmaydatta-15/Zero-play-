@@ -25,7 +25,12 @@
 > [!NOTE]
 > **Built-In GitHub Self-Update:** Zero Play checks [`tanmaydatta-15/Zero-play-`](https://github.com/tanmaydatta-15/Zero-play-/releases) directly inside **Settings → Auto update** (supporting both **Stable** and **Preview** channels) and supports Play Store-style binary delta patching.
 
----
+---## 📸 Screenshots
+
+| Now Playing | Media Converter | Video Remuxer | Download Manager |
+| :---: | :---: | :---: | :---: |
+| <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" width="200" alt="Now Playing UI" /> | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.png" width="200" alt="AVIF and JXL Converter" /> | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.png" width="200" alt="Video Converter" /> | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4.png" width="200" alt="Download Configurator" /> |
+
 
 ## Table of Contents
 
